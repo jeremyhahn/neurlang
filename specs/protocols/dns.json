@@ -1,0 +1,213 @@
+{
+  "name": "dns",
+  "description": "Domain Name System (RFC 1035) - Text representation for testing",
+  "version": "1.0",
+  "transport": "udp",
+  "port": 53,
+  "states": [
+    {
+      "name": "READY",
+      "initial": true,
+      "description": "Ready to process queries"
+    }
+  ],
+  "commands": [
+    {
+      "name": "A_QUERY",
+      "pattern": "QUERY A {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "PatternMatch",
+            "comment": "Parse query type and domain"
+          },
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup A record",
+            "comment": "Lookup A record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER A {domain} {ip}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AAAA_QUERY",
+      "pattern": "QUERY AAAA {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup AAAA record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER AAAA {domain} {ip}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MX_QUERY",
+      "pattern": "QUERY MX {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup MX record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER MX {domain} {priority} {mailserver}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CNAME_QUERY",
+      "pattern": "QUERY CNAME {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup CNAME record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER CNAME {domain} {target}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TXT_QUERY",
+      "pattern": "QUERY TXT {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup TXT record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER TXT {domain} \"{text}\"\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NS_QUERY",
+      "pattern": "QUERY NS {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup NS record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER NS {domain} {nameserver}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PTR_QUERY",
+      "pattern": "QUERY PTR {ip}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns reverse lookup"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER PTR {ip} {domain}\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SOA_QUERY",
+      "pattern": "QUERY SOA {domain}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "dns lookup SOA record"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "ANSWER SOA {domain} {mname} {rname} {serial} {refresh} {retry} {expire} {minimum}\n"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": {
+    "nxdomain": "NXDOMAIN {domain}\n",
+    "servfail": "SERVFAIL {domain}\n",
+    "refused": "REFUSED {domain}\n",
+    "formerr": "FORMERR\n"
+  },
+  "tests": [
+    {
+      "name": "a_record_lookup",
+      "description": "Lookup A record",
+      "steps": [
+        {
+          "send": "QUERY A example.com\n",
+          "expect_contains": "ANSWER A example.com"
+        }
+      ]
+    },
+    {
+      "name": "mx_record_lookup",
+      "description": "Lookup MX record",
+      "steps": [
+        {
+          "send": "QUERY MX example.com\n",
+          "expect_contains": "ANSWER MX"
+        }
+      ]
+    },
+    {
+      "name": "nonexistent_domain",
+      "description": "Query for non-existent domain",
+      "steps": [
+        {
+          "send": "QUERY A nonexistent.invalid\n",
+          "expect": "NXDOMAIN nonexistent.invalid\n"
+        }
+      ]
+    },
+    {
+      "name": "reverse_lookup",
+      "description": "PTR record lookup",
+      "steps": [
+        {
+          "send": "QUERY PTR 8.8.8.8\n",
+          "expect_contains": "ANSWER PTR"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+; UDP Server Skeleton Template
+; Protocol: {{PROTOCOL_NAME}}
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides the structure for a UDP-based service.
+; Connectionless, message-oriented communication.
+;
+; Register conventions:
+;   r10: Socket FD
+;   r11: Message length received
+;   r12: Sender address buffer pointer
+;   r13: Sender address length
+;   r14: Application state
+;   r15: Buffer pointer
+;
+; Data section:
+;   recv_buf: Input buffer (65536 bytes - max UDP datagram)
+;   send_buf: Output buffer (65536 bytes)
+;   addr_buf: Sender address storage
+
+.data:
+    ; Server configuration
+    port:           .word {{PORT}}
+
+    ; Address family constants
+    AF_INET:        .word 2
+    SOCK_DGRAM:     .word 2
+
+    ; Buffers
+    recv_buf:       .space 65536
+    send_buf:       .space 65536
+    addr_buf:       .space 128      ; sockaddr_storage
+    addr_len:       .word 128
+
+    ; Error responses
+    err_malformed:      .string "{{ERROR_MALFORMED}}"
+    err_malformed_len:  .word {{ERROR_MALFORMED_LEN}}
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create UDP socket
+    load r0, [AF_INET]
+    load r1, [SOCK_DGRAM]
+    mov r2, 0               ; protocol
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options (SO_REUSEADDR)
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind to port
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Initialize application state
+    mov r14, 0
+
+; ============================================================================
+; Message Receive Loop
+; ============================================================================
+.recv_loop:
+    ; Receive datagram with sender address
+    mov r0, r10             ; socket
+    lea r1, recv_buf        ; buffer
+    mov r2, 65536           ; max length
+    lea r3, addr_buf        ; sender address
+    lea r4, addr_len        ; address length ptr
+    io.recvfrom r11, r0, r1, r2, r3, r4
+
+    ; Store buffer pointer
+    lea r15, recv_buf
+
+    ; Check for error (r11 < 0)
+    bltz r11, .recv_error
+
+    ; Process received message
+{{SLOT_PARSE_MESSAGE}}
+
+    ; Dispatch based on message type
+{{SLOT_MESSAGE_DISPATCH}}
+
+    ; Continue receiving
+    b .recv_loop
+
+; ============================================================================
+; Message Handlers
+; ============================================================================
+{{MESSAGE_HANDLERS}}
+
+; ============================================================================
+; Response Helpers
+; ============================================================================
+.send_response:
+    ; Input: r0 = response buffer, r1 = response length
+    ; Uses stored sender address from addr_buf
+    mov r2, r10             ; socket
+    lea r3, addr_buf        ; destination address
+    load r4, [addr_len]     ; address length
+    io.sendto r2, r2, r0, r1, r3, r4
+    ret
+
+.send_error:
+    lea r0, err_malformed
+    load r1, [err_malformed_len]
+    call .send_response
+    b .recv_loop
+
+; ============================================================================
+; Error Handling
+; ============================================================================
+.recv_error:
+    ; Log error and continue
+    b .recv_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

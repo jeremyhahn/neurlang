@@ -1,0 +1,313 @@
+; ============================================================================
+; WORKER SERVICE TEMPLATE
+; ============================================================================
+; Template for background job processing with queue consumption
+;
+; Use Cases:
+;   - Message queue consumers (Redis, RabbitMQ, SQS)
+;   - Scheduled task runners
+;   - Event processors
+;   - Batch data pipelines
+;
+; Slot Types Used:
+;   - ExtensionCall: Queue operations (dequeue, ack, nack)
+;   - PatternSwitch: Route jobs by type
+;   - StateTransition: Track job state
+;   - LoopUntil: Main processing loop
+;   - ErrorResponse: Handle job failures
+;
+; Register Conventions:
+;   r0-r3:  Function arguments, return values
+;   r10:    Queue connection handle
+;   r11:    Current job handle
+;   r12:    Job type identifier
+;   r13:    Job payload pointer
+;   r14:    Job payload length
+;   r15:    Retry count / temp
+;   r20:    Worker state (RUNNING=1, STOPPING=2, STOPPED=0)
+;   r21:    Processed job count
+;   r22:    Failed job count
+;
+; ============================================================================
+
+.data:
+    ; Queue configuration
+    queue_url:       .asciiz "{{QUEUE_URL}}"
+    queue_name:      .asciiz "{{QUEUE_NAME}}"
+    worker_id:       .asciiz "{{WORKER_ID}}"
+
+    ; Processing configuration
+    max_retries:     .word 3
+    visibility_timeout: .word 30    ; seconds
+    poll_interval:   .word 1000     ; milliseconds
+    batch_size:      .word 10
+
+    ; Buffers
+    job_buffer:      .space 65536   ; Job payload
+    result_buffer:   .space 4096    ; Job result
+    error_buffer:    .space 1024    ; Error message
+
+    ; Status messages
+    msg_starting:    .asciiz "Worker starting...\n"
+    msg_connected:   .asciiz "Connected to queue\n"
+    msg_processing:  .asciiz "Processing job: "
+    msg_completed:   .asciiz "Job completed\n"
+    msg_failed:      .asciiz "Job failed: "
+    msg_retrying:    .asciiz "Retrying job, attempt "
+    msg_shutdown:    .asciiz "Worker shutting down...\n"
+    msg_stats:       .asciiz "Processed: "
+
+    ; Worker states
+    STATE_STOPPED:   .word 0
+    STATE_RUNNING:   .word 1
+    STATE_STOPPING:  .word 2
+
+.text:
+
+; ============================================================================
+; ENTRY POINT
+; ============================================================================
+.entry:
+    mov r0, msg_starting
+    sys.call PRINT, r0
+
+    ; Initialize counters
+    mov r21, 0              ; processed count
+    mov r22, 0              ; failed count
+    mov r20, STATE_RUNNING
+    load.w r20, [r20]
+
+    ; Connect to queue
+    call .queue_connect
+    beq r10, zero, .connect_failed
+
+    mov r0, msg_connected
+    sys.call PRINT, r0
+
+    ; {{SLOT_WORKER_INIT}}
+    ; Slot: Custom initialization (load config, warm caches, etc.)
+
+    b .main_loop
+
+.connect_failed:
+    mov r0, 1
+    halt
+
+; ============================================================================
+; MAIN PROCESSING LOOP
+; ============================================================================
+.main_loop:
+    ; Check if we should stop
+    mov r0, STATE_RUNNING
+    load.w r0, [r0]
+    bne r20, r0, .shutdown
+
+    ; {{SLOT_CHECK_SIGNALS}}
+    ; Slot: Check for shutdown signal (SIGTERM, etc.)
+    ; Sets r20 = STATE_STOPPING if received
+
+    ; Poll for job
+    call .dequeue_job
+    beq r11, zero, .no_job
+
+    ; Process job
+    call .process_job
+
+    b .main_loop
+
+.no_job:
+    ; No job available, wait before retrying
+    mov r0, poll_interval
+    load.w r0, [r0]
+    sys.call SLEEP_MS, r0
+    b .main_loop
+
+; ============================================================================
+; QUEUE OPERATIONS
+; ============================================================================
+.queue_connect:
+    mov r0, queue_url
+    mov r1, queue_name
+    ext.call @"queue connect", r0, r1
+    mov r10, r0
+    ret
+
+.dequeue_job:
+    ; Fetch next job from queue
+    ; Output: r11 = job handle (0 if none)
+    ;         r12 = job type
+    ;         r13 = payload ptr
+    ;         r14 = payload length
+
+    mov r0, r10             ; queue handle
+    mov r1, visibility_timeout
+    load.w r1, [r1]
+    mov r2, job_buffer
+    mov r3, 65536
+    ext.call @"queue dequeue", r0, r1, r2, r3
+
+    mov r11, r0             ; job handle
+    beq r11, zero, .dequeue_empty
+
+    ; Parse job metadata
+    ; {{SLOT_PARSE_JOB_METADATA}}
+    ; Slot: Extract job type, payload from message
+    ; Sets: r12 = type, r13 = payload ptr, r14 = length
+
+    mov r13, job_buffer
+    mov r14, r0
+
+.dequeue_empty:
+    ret
+
+.ack_job:
+    ; Mark job as successfully processed
+    mov r0, r10             ; queue
+    mov r1, r11             ; job handle
+    ext.call @"queue ack", r0, r1
+    ret
+
+.nack_job:
+    ; Return job to queue for retry
+    mov r0, r10
+    mov r1, r11
+    mov r2, r15             ; retry count
+    ext.call @"queue nack", r0, r1, r2
+    ret
+
+.dead_letter:
+    ; Move to dead letter queue
+    mov r0, r10
+    mov r1, r11
+    mov r2, error_buffer
+    ext.call @"queue dead letter", r0, r1, r2
+    ret
+
+; ============================================================================
+; JOB PROCESSING
+; ============================================================================
+.process_job:
+    ; Log job start
+    mov r0, msg_processing
+    sys.call PRINT, r0
+
+    ; {{SLOT_LOG_JOB_ID}}
+    ; Slot: Print job identifier
+
+    ; Reset retry count from job metadata or 0
+    mov r15, 0
+
+    ; {{SLOT_JOB_DISPATCH}}
+    ; Slot: PatternSwitch on job type (r12)
+    ; Routes to appropriate handler
+
+    b .handle_unknown_job
+
+; ============================================================================
+; JOB HANDLERS (customize these)
+; ============================================================================
+
+{{JOB_HANDLERS}}
+
+.handle_unknown_job:
+    ; Unknown job type - move to dead letter
+    mov r0, error_buffer
+    ; {{SLOT_BUILD_UNKNOWN_ERROR}}
+    ; Slot: Build "Unknown job type" error message
+
+    call .dead_letter
+    addi r22, r22, 1        ; Increment failed count
+    ret
+
+; ============================================================================
+; JOB RESULT HANDLING
+; ============================================================================
+.job_success:
+    ; Job completed successfully
+    call .ack_job
+
+    mov r0, msg_completed
+    sys.call PRINT, r0
+
+    addi r21, r21, 1        ; Increment processed count
+
+    ; {{SLOT_SUCCESS_CALLBACK}}
+    ; Slot: Optional success webhook/notification
+
+    ret
+
+.job_failure:
+    ; Job failed - check retry policy
+    mov r0, max_retries
+    load.w r0, [r0]
+    bge r15, r0, .job_exhausted
+
+    ; Can retry
+    mov r0, msg_retrying
+    sys.call PRINT, r0
+    addi r15, r15, 1
+    ; Print retry count
+    mov r0, r15
+    call .print_int
+    mov r0, 0x0A
+    sys.call PRINT_CHAR, r0
+
+    call .nack_job
+    ret
+
+.job_exhausted:
+    ; All retries exhausted - dead letter
+    mov r0, msg_failed
+    sys.call PRINT, r0
+
+    ; {{SLOT_BUILD_FAILURE_REASON}}
+    ; Slot: Build error message from exception/error state
+
+    call .dead_letter
+    addi r22, r22, 1
+
+    ; {{SLOT_FAILURE_CALLBACK}}
+    ; Slot: Optional failure webhook/alert
+
+    ret
+
+; ============================================================================
+; SHUTDOWN
+; ============================================================================
+.shutdown:
+    mov r0, msg_shutdown
+    sys.call PRINT, r0
+
+    ; Print stats
+    mov r0, msg_stats
+    sys.call PRINT, r0
+    mov r0, r21
+    call .print_int
+    mov r0, 0x0A
+    sys.call PRINT_CHAR, r0
+
+    ; {{SLOT_GRACEFUL_SHUTDOWN}}
+    ; Slot: Wait for in-flight jobs, cleanup
+
+    ; Disconnect from queue
+    beq r10, zero, .exit
+    mov r0, r10
+    ext.call @"queue disconnect", r0
+
+.exit:
+    mov r0, 0
+    halt
+
+; ============================================================================
+; UTILITIES
+; ============================================================================
+
+.print_int:
+    ext.call @"print integer", r0
+    ret
+
+; ============================================================================
+; DATA SECTION FOR SLOTS
+; ============================================================================
+
+{{DATA_ITEMS}}

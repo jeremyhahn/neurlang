@@ -1,0 +1,197 @@
+; ============================================================================
+; CLI APPLICATION TEMPLATE
+; ============================================================================
+; Template for command-line tools with argument parsing, help, and subcommands
+;
+; Slot Types Used:
+;   - PatternMatch: Parse command-line flags and arguments
+;   - PatternSwitch: Route to subcommand handlers
+;   - ResponseBuilder: Format output messages
+;   - ErrorResponse: Print error messages to stderr
+;   - StringCompare: Match subcommands and flags
+;   - IntToString: Format numeric output
+;
+; Register Conventions:
+;   r0-r3:  Function arguments, return values
+;   r10:    argc (argument count)
+;   r11:    argv pointer (array of string pointers)
+;   r12:    Current argument index
+;   r13:    Flags bitmask (parsed options)
+;   r14:    Output buffer pointer
+;   r15:    Temp/scratch
+;
+; Data Layout:
+;   [0x1000]: Program name string
+;   [0x1100]: Version string
+;   [0x1200]: Help text buffer (4KB)
+;   [0x2200]: Output buffer (4KB)
+;   [0x3200]: Error buffer (1KB)
+;
+; ============================================================================
+
+.data:
+    program_name:    .asciiz "{{PROGRAM_NAME}}"
+    version:         .asciiz "{{VERSION}}"
+
+    ; Help text
+    help_header:     .asciiz "Usage: {{PROGRAM_NAME}} [OPTIONS] <COMMAND> [ARGS]\n\n"
+    help_options:    .asciiz "Options:\n  -h, --help     Show this help\n  -v, --version  Show version\n  -q, --quiet    Suppress output\n\n"
+    help_commands:   .asciiz "Commands:\n{{HELP_COMMANDS}}\n"
+
+    ; Error messages
+    err_unknown_cmd: .asciiz "Error: Unknown command '"
+    err_missing_arg: .asciiz "Error: Missing required argument\n"
+    err_invalid_opt: .asciiz "Error: Invalid option '"
+    err_suffix:      .asciiz "'\n"
+
+    ; Flag constants
+    FLAG_HELP:       .word 0x01
+    FLAG_VERSION:    .word 0x02
+    FLAG_QUIET:      .word 0x04
+    FLAG_VERBOSE:    .word 0x08
+
+.text:
+
+; ============================================================================
+; ENTRY POINT
+; ============================================================================
+.entry:
+    ; r10 = argc, r11 = argv (set by runtime)
+    mov r12, 1              ; Start at argv[1] (skip program name)
+    mov r13, 0              ; Clear flags
+
+; ============================================================================
+; PARSE OPTIONS (flags starting with -)
+; ============================================================================
+.parse_options:
+    ; Check if we've consumed all arguments
+    bge r12, r10, .no_command
+
+    ; Load current argument pointer
+    shl r15, r12, 3         ; r15 = r12 * 8 (pointer size)
+    add r15, r11, r15
+    load.q r0, [r15]        ; r0 = argv[r12]
+
+    ; Check if it starts with '-'
+    load.b r1, [r0]
+    mov r2, 0x2D            ; '-'
+    bne r1, r2, .parse_command   ; Not an option, must be command
+
+    ; {{SLOT_PARSE_FLAG}}
+    ; Slot: PatternSwitch on flag patterns
+    ; Input: r0 = argument string
+    ; Sets: r13 flags bitmask
+    ; Advances: r12 if flag consumed
+
+    b .parse_options
+
+; ============================================================================
+; HANDLE --help FLAG
+; ============================================================================
+.handle_help:
+    mov r0, help_header
+    sys.call PRINT, r0
+    mov r0, help_options
+    sys.call PRINT, r0
+    mov r0, help_commands
+    sys.call PRINT, r0
+    mov r0, 0
+    halt
+
+; ============================================================================
+; HANDLE --version FLAG
+; ============================================================================
+.handle_version:
+    mov r0, program_name
+    sys.call PRINT, r0
+    mov r0, 0x20            ; space
+    sys.call PRINT_CHAR, r0
+    mov r0, version
+    sys.call PRINT, r0
+    mov r0, 0x0A            ; newline
+    sys.call PRINT_CHAR, r0
+    mov r0, 0
+    halt
+
+; ============================================================================
+; PARSE COMMAND (subcommand routing)
+; ============================================================================
+.parse_command:
+    ; r0 already has current argument (command name)
+
+    ; {{SLOT_COMMAND_DISPATCH}}
+    ; Slot: PatternSwitch on command names
+    ; Input: r0 = command string
+    ; Jumps to: .cmd_<name> labels
+    ; Falls through to: .unknown_command
+
+.unknown_command:
+    mov r1, err_unknown_cmd
+    sys.call PRINT_ERR, r1
+    sys.call PRINT_ERR, r0
+    mov r1, err_suffix
+    sys.call PRINT_ERR, r1
+    mov r0, 1
+    halt
+
+.no_command:
+    ; No command provided - show help or error based on flags
+    and r1, r13, FLAG_HELP
+    bne r1, zero, .handle_help
+    and r1, r13, FLAG_VERSION
+    bne r1, zero, .handle_version
+
+    ; Default: show usage hint
+    mov r0, help_header
+    sys.call PRINT_ERR, r0
+    mov r0, 1
+    halt
+
+; ============================================================================
+; COMMAND HANDLERS
+; ============================================================================
+
+{{COMMAND_HANDLERS}}
+
+; ============================================================================
+; UTILITY: Parse remaining arguments for current command
+; ============================================================================
+.parse_cmd_args:
+    ; r12 = current index (points to first arg after command)
+    ; Returns: r0 = number of remaining args
+    sub r0, r10, r12
+    ret
+
+; ============================================================================
+; UTILITY: Get argument at index
+; ============================================================================
+.get_arg:
+    ; Input: r0 = index (relative to command)
+    ; Output: r0 = string pointer, or 0 if out of bounds
+    add r1, r12, r0         ; Absolute index
+    bge r1, r10, .get_arg_oob
+    shl r1, r1, 3
+    add r1, r11, r1
+    load.q r0, [r1]
+    ret
+.get_arg_oob:
+    mov r0, 0
+    ret
+
+; ============================================================================
+; UTILITY: Print formatted output (respects --quiet flag)
+; ============================================================================
+.print_output:
+    ; Input: r0 = string to print
+    ; Checks FLAG_QUIET before printing
+    and r1, r13, FLAG_QUIET
+    bne r1, zero, .print_output_skip
+    sys.call PRINT, r0
+.print_output_skip:
+    ret
+
+; ============================================================================
+; DATA SECTION FOR SLOTS
+; ============================================================================
+
+{{DATA_ITEMS}}

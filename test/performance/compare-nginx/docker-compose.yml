@@ -1,0 +1,59 @@
+# Neurlang vs nginx Performance Comparison
+# Both services run in Docker with identical network paths
+# Usage: docker compose up --build --abort-on-container-exit
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: perf-nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - perf-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ > /dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  nl:
+    build:
+      context: ../../..
+      dockerfile: tests/performance/compare-nginx/Dockerfile.nl
+    container_name: perf-nl
+    environment:
+      - WORKERS=${NL_WORKERS:-0}
+    networks:
+      - perf-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/ > /dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    container_name: perf-benchmark
+    depends_on:
+      nginx:
+        condition: service_healthy
+      nl:
+        condition: service_healthy
+    volumes:
+      - ./results:/app/results
+    environment:
+      # Both services on Docker internal network - same network path
+      - NGINX_URL=http://nginx:80/
+      - NL_URL=http://nl:8080/
+      - REQUESTS=${REQUESTS:-10000}
+      - CONCURRENCY=${CONCURRENCY:-10}
+    networks:
+      - perf-net
+
+networks:
+  perf-net:
+    driver: bridge

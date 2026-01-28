@@ -1,0 +1,315 @@
+; ============================================================================
+; GRPC CLIENT TEMPLATE
+; ============================================================================
+; Template for gRPC client with protobuf serialization
+;
+; REQUIRES EXTENSIONS:
+;   - http2: HTTP/2 framing and multiplexing
+;   - protobuf: Protocol buffer encode/decode
+;   - tls: TLS 1.2+ for secure channels (optional)
+;
+; Slot Types Used:
+;   - ExtensionCall: gRPC/protobuf operations
+;   - BufferWrite: Build protobuf messages
+;   - BufferRead: Parse protobuf responses
+;   - ErrorResponse: Handle gRPC status codes
+;   - StateTransition: Track call state
+;
+; Register Conventions:
+;   r0-r3:  Function arguments, return values
+;   r10:    Channel handle (HTTP/2 connection)
+;   r11:    Stream ID for current call
+;   r12:    gRPC status code
+;   r13:    Response message pointer
+;   r14:    Response message length
+;   r15:    Temp/scratch
+;
+; gRPC Status Codes:
+;   0  = OK
+;   1  = CANCELLED
+;   2  = UNKNOWN
+;   3  = INVALID_ARGUMENT
+;   4  = DEADLINE_EXCEEDED
+;   5  = NOT_FOUND
+;   13 = INTERNAL
+;   14 = UNAVAILABLE
+;
+; ============================================================================
+
+.data:
+    ; Connection config
+    server_host:     .asciiz "{{SERVER_HOST}}"
+    server_port:     .word {{SERVER_PORT}}
+    service_name:    .asciiz "{{SERVICE_NAME}}"
+
+    ; Method paths (gRPC format: /package.Service/Method)
+    {{METHOD_PATHS}}
+
+    ; Buffers
+    request_buffer:  .space 65536     ; Serialized request (64KB)
+    response_buffer: .space 65536     ; Serialized response (64KB)
+    frame_buffer:    .space 16384     ; HTTP/2 frame buffer
+    metadata_buffer: .space 4096      ; gRPC metadata
+
+    ; gRPC headers
+    content_type:    .asciiz "application/grpc"
+    te_header:       .asciiz "trailers"
+
+    ; Error messages
+    err_connect:     .asciiz "Error: Failed to connect to gRPC server\n"
+    err_serialize:   .asciiz "Error: Failed to serialize request\n"
+    err_deserialize: .asciiz "Error: Failed to deserialize response\n"
+    err_status:      .asciiz "Error: gRPC call failed with status "
+
+.text:
+
+; ============================================================================
+; ENTRY POINT
+; ============================================================================
+.entry:
+    ; Establish channel
+    call .connect_channel
+    beq r10, zero, .connect_failed
+
+    ; {{SLOT_SETUP_CALL}}
+    ; Slot: Prepare the gRPC call based on method
+
+    b .execute_call
+
+; ============================================================================
+; CONNECT TO GRPC SERVER
+; ============================================================================
+.connect_channel:
+    ; Create HTTP/2 connection (with TLS if configured)
+    mov r0, server_host
+    mov r1, server_port
+    load.w r1, [r1]
+
+    ; {{SLOT_TLS_SETUP}}
+    ; Slot: Optional TLS configuration
+    ; If TLS enabled, set up secure channel
+
+    ext.call @"http2 connect", r0, r1
+    mov r10, r0             ; Save channel handle
+    ret
+
+.connect_failed:
+    mov r0, err_connect
+    sys.call PRINT_ERR, r0
+    mov r0, 1
+    halt
+
+; ============================================================================
+; EXECUTE GRPC CALL
+; ============================================================================
+.execute_call:
+    ; {{SLOT_METHOD_DISPATCH}}
+    ; Slot: Route to appropriate method handler
+    ; PatternSwitch on method name
+
+    b .call_unary           ; Default to unary
+
+; ============================================================================
+; UNARY RPC CALL (request-response)
+; ============================================================================
+.call_unary:
+    ; Input: r0 = method path, r1 = request message ptr, r2 = request length
+    ; Output: r13 = response message ptr, r14 = response length, r12 = status
+
+    mov r4, r0              ; Save method path
+    mov r5, r1              ; Save request ptr
+    mov r6, r2              ; Save request length
+
+    ; Open HTTP/2 stream with gRPC headers
+    mov r0, r10             ; channel
+    mov r1, r4              ; path
+    mov r2, content_type
+    ext.call @"http2 open stream", r0, r1, r2
+    mov r11, r0             ; Save stream ID
+    beq r11, zero, .stream_error
+
+    ; Send gRPC length-prefixed message
+    ; Format: [compression flag (1 byte)] [message length (4 bytes BE)] [message]
+    mov r0, request_buffer
+    mov r1, 0               ; No compression
+    store.b r1, [r0]
+
+    ; Store length as big-endian 32-bit
+    mov r1, r6              ; message length
+    addi r2, r0, 1
+    call .write_be32
+
+    ; Copy message
+    addi r0, r0, 5          ; Skip header
+    mov r1, r5              ; source
+    mov r2, r6              ; length
+    call .memcpy
+
+    ; Send data frame
+    mov r0, r10             ; channel
+    mov r1, r11             ; stream
+    mov r2, request_buffer
+    addi r3, r6, 5          ; length + 5 byte header
+    ext.call @"http2 send data", r0, r1, r2, r3
+
+    ; Send end stream
+    mov r0, r10
+    mov r1, r11
+    ext.call @"http2 end stream", r0, r1
+
+    ; Wait for response
+    b .receive_response
+
+; ============================================================================
+; RECEIVE GRPC RESPONSE
+; ============================================================================
+.receive_response:
+    ; Read response data
+    mov r0, r10             ; channel
+    mov r1, r11             ; stream
+    mov r2, response_buffer
+    mov r3, 65536           ; max length
+    ext.call @"http2 receive data", r0, r1, r2, r3
+    mov r7, r0              ; bytes received
+
+    beq r7, zero, .empty_response
+
+    ; Parse gRPC length-prefixed message
+    mov r0, response_buffer
+    load.b r1, [r0]         ; compression flag (ignore for now)
+
+    addi r0, r0, 1
+    call .read_be32         ; r0 = message length
+    mov r14, r0
+
+    ; Point to actual message
+    addi r13, response_buffer, 5
+
+    ; Get gRPC status from trailers
+    mov r0, r10
+    mov r1, r11
+    ext.call @"http2 get trailer", r0, r1
+    mov r12, r0             ; gRPC status
+
+    ; Check status
+    bne r12, zero, .grpc_error
+
+    b .process_response
+
+.empty_response:
+    mov r14, 0
+    mov r13, 0
+    mov r12, 0
+    b .process_response
+
+.stream_error:
+    mov r12, 14             ; UNAVAILABLE
+    b .grpc_error
+
+.grpc_error:
+    ; {{SLOT_HANDLE_GRPC_ERROR}}
+    ; Slot: Handle gRPC error based on status code
+    ; Input: r12 = status code
+
+    mov r0, err_status
+    sys.call PRINT_ERR, r0
+    mov r0, r12
+    call .print_int
+    mov r0, 0x0A
+    sys.call PRINT_CHAR_ERR, r0
+    b .cleanup
+
+; ============================================================================
+; PROCESS RESPONSE
+; ============================================================================
+.process_response:
+    ; {{SLOT_DESERIALIZE_RESPONSE}}
+    ; Slot: ExtensionCall to protobuf decode
+    ; Input: r13 = message ptr, r14 = message length
+    ; Output: Parsed fields in registers or memory
+
+    ; {{SLOT_HANDLE_RESPONSE}}
+    ; Slot: Application-specific response handling
+
+    b .cleanup
+
+; ============================================================================
+; CLEANUP
+; ============================================================================
+.cleanup:
+    ; Close stream
+    beq r11, zero, .cleanup_channel
+    mov r0, r10
+    mov r1, r11
+    ext.call @"http2 close stream", r0, r1
+
+.cleanup_channel:
+    ; Close channel
+    beq r10, zero, .exit
+    mov r0, r10
+    ext.call @"http2 close", r0
+
+.exit:
+    mov r0, r12             ; Return gRPC status as exit code
+    halt
+
+; ============================================================================
+; UTILITIES
+; ============================================================================
+
+.write_be32:
+    ; Write 32-bit big-endian value
+    ; Input: r1 = value, r2 = destination
+    shr r3, r1, 24
+    store.b r3, [r2]
+    shr r3, r1, 16
+    and r3, r3, 0xFF
+    store.b r3, [r2 + 1]
+    shr r3, r1, 8
+    and r3, r3, 0xFF
+    store.b r3, [r2 + 2]
+    and r3, r1, 0xFF
+    store.b r3, [r2 + 3]
+    ret
+
+.read_be32:
+    ; Read 32-bit big-endian value
+    ; Input: r0 = source
+    ; Output: r0 = value
+    load.b r1, [r0]
+    shl r1, r1, 24
+    load.b r2, [r0 + 1]
+    shl r2, r2, 16
+    or r1, r1, r2
+    load.b r2, [r0 + 2]
+    shl r2, r2, 8
+    or r1, r1, r2
+    load.b r2, [r0 + 3]
+    or r0, r1, r2
+    ret
+
+.memcpy:
+    ; Copy r2 bytes from r1 to r0
+    beq r2, zero, .memcpy_done
+.memcpy_loop:
+    load.b r3, [r1]
+    store.b r3, [r0]
+    addi r0, r0, 1
+    addi r1, r1, 1
+    subi r2, r2, 1
+    bne r2, zero, .memcpy_loop
+.memcpy_done:
+    ret
+
+.print_int:
+    ; Print integer (simple decimal)
+    ; Input: r0 = value
+    ; (Slot or stdlib call)
+    ext.call @"print integer", r0
+    ret
+
+; ============================================================================
+; DATA SECTION FOR SLOTS
+; ============================================================================
+
+{{DATA_ITEMS}}

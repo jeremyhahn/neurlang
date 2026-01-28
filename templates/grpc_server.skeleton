@@ -1,0 +1,283 @@
+; gRPC Server Skeleton Template
+; Protocol: gRPC over HTTP/2
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for a gRPC server.
+; Requires HTTP/2 framing and Protocol Buffers encoding (via extensions).
+;
+; NOTE: gRPC implementation requires extensions for:
+;   - HTTP/2 framing (HPACK header compression, streams, flow control)
+;   - Protocol Buffers encoding/decoding
+;   - TLS (typically required for gRPC)
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client connection FD
+;   r12: Message length
+;   r13: HTTP/2 stream ID
+;   r14: gRPC method index
+;   r15: Request buffer pointer
+;   r16: Request protobuf pointer
+;   r17: Response protobuf pointer
+;   r18: gRPC status code
+;
+; gRPC Status Codes:
+;   0: OK
+;   1: CANCELLED
+;   2: UNKNOWN
+;   3: INVALID_ARGUMENT
+;   4: DEADLINE_EXCEEDED
+;   5: NOT_FOUND
+;   12: UNIMPLEMENTED
+;   13: INTERNAL
+;   14: UNAVAILABLE
+
+.data:
+    ; Server configuration
+    port:           .word {{PORT}}
+    backlog:        .word 128
+
+    ; HTTP/2 preface (client sends this)
+    h2_preface:     .string "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+    h2_preface_len: .word 24
+
+    ; HTTP/2 frame types
+    H2_FRAME_DATA:      .word 0x0
+    H2_FRAME_HEADERS:   .word 0x1
+    H2_FRAME_SETTINGS:  .word 0x4
+    H2_FRAME_PING:      .word 0x6
+    H2_FRAME_GOAWAY:    .word 0x7
+    H2_FRAME_WINDOW:    .word 0x8
+
+    ; gRPC status codes
+    GRPC_OK:            .word 0
+    GRPC_CANCELLED:     .word 1
+    GRPC_UNKNOWN:       .word 2
+    GRPC_INVALID_ARG:   .word 3
+    GRPC_NOT_FOUND:     .word 5
+    GRPC_UNIMPLEMENTED: .word 12
+    GRPC_INTERNAL:      .word 13
+
+    ; Service and method definitions
+    service_name:   .string "{{SERVICE_NAME}}"
+    service_len:    .word {{SERVICE_NAME_LEN}}
+
+    ; gRPC content-type
+    content_type:   .string "application/grpc"
+    content_type_len: .word 16
+
+    ; Buffers
+    recv_buf:       .space 65536
+    send_buf:       .space 65536
+    h2_frame_buf:   .space 16384
+    protobuf_buf:   .space 32768
+    header_buf:     .space 4096
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Listen
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+; ============================================================================
+; Accept Loop
+; ============================================================================
+.accept_loop:
+    mov r0, r10
+    io.accept r11, r0
+    b .h2_connection_setup
+
+; ============================================================================
+; HTTP/2 Connection Setup
+; ============================================================================
+.h2_connection_setup:
+    ; Read HTTP/2 connection preface
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 24              ; Preface length
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    ; Verify preface
+{{SLOT_VERIFY_H2_PREFACE}}
+
+    ; Send SETTINGS frame (server settings)
+{{SLOT_SEND_H2_SETTINGS}}
+
+    ; Read client SETTINGS
+{{SLOT_READ_H2_SETTINGS}}
+
+    ; Send SETTINGS ACK
+{{SLOT_SEND_H2_SETTINGS_ACK}}
+
+    b .h2_frame_loop
+
+; ============================================================================
+; HTTP/2 Frame Processing Loop
+; ============================================================================
+.h2_frame_loop:
+    ; Read frame header (9 bytes)
+    mov r0, r11
+    lea r1, h2_frame_buf
+    mov r2, 9
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    ; Parse frame header
+    ; Bytes 0-2: length (24-bit)
+    ; Byte 3: type
+    ; Byte 4: flags
+    ; Bytes 5-8: stream ID
+{{SLOT_PARSE_H2_FRAME_HEADER}}
+    ; r12 = payload length, r14 = type, r13 = stream ID
+
+    ; Read frame payload
+    beqz r12, .dispatch_frame
+    mov r0, r11
+    lea r1, h2_frame_buf
+    addi r1, r1, 9          ; After header
+    mov r2, r12
+    io.recv r3, r0, r1, r2
+
+.dispatch_frame:
+    ; Dispatch based on frame type
+    load r0, [H2_FRAME_HEADERS]
+    beq r14, r0, .handle_headers_frame
+
+    load r0, [H2_FRAME_DATA]
+    beq r14, r0, .handle_data_frame
+
+    load r0, [H2_FRAME_SETTINGS]
+    beq r14, r0, .handle_settings_frame
+
+    load r0, [H2_FRAME_PING]
+    beq r14, r0, .handle_ping_frame
+
+    load r0, [H2_FRAME_WINDOW]
+    beq r14, r0, .handle_window_frame
+
+    load r0, [H2_FRAME_GOAWAY]
+    beq r14, r0, .handle_goaway_frame
+
+    ; Unknown frame type, ignore
+    b .h2_frame_loop
+
+; ============================================================================
+; Frame Handlers
+; ============================================================================
+.handle_headers_frame:
+    ; Decode HPACK headers
+{{SLOT_DECODE_HPACK}}
+    ; Extract :path to determine method
+
+    ; Route to gRPC method
+{{SLOT_ROUTE_GRPC_METHOD}}
+    b .h2_frame_loop
+
+.handle_data_frame:
+    ; Data frame contains gRPC message (length-prefixed protobuf)
+    ; First 5 bytes: compression flag (1) + message length (4)
+{{SLOT_PARSE_GRPC_MESSAGE}}
+
+    ; Decode protobuf request
+{{SLOT_DECODE_PROTOBUF_REQUEST}}
+
+    ; Dispatch to handler based on current method (r14)
+{{SLOT_DISPATCH_TO_HANDLER}}
+    b .h2_frame_loop
+
+.handle_settings_frame:
+    ; Process SETTINGS, send ACK
+{{SLOT_PROCESS_H2_SETTINGS}}
+    b .h2_frame_loop
+
+.handle_ping_frame:
+    ; Respond with PING ACK
+{{SLOT_SEND_PING_ACK}}
+    b .h2_frame_loop
+
+.handle_window_frame:
+    ; Update flow control window
+{{SLOT_UPDATE_WINDOW}}
+    b .h2_frame_loop
+
+.handle_goaway_frame:
+    ; Client is closing, finish gracefully
+    b .close_connection
+
+; ============================================================================
+; gRPC Method Handlers
+; ============================================================================
+{{GRPC_METHOD_HANDLERS}}
+
+; ============================================================================
+; Response Helpers
+; ============================================================================
+.send_grpc_response:
+    ; Input: r0 = response protobuf ptr, r1 = length, r13 = stream ID
+    ; r18 = grpc status code
+
+    ; Build gRPC response (5-byte header + protobuf)
+{{SLOT_BUILD_GRPC_MESSAGE}}
+
+    ; Send HEADERS frame with :status 200 and grpc-status trailer
+{{SLOT_SEND_RESPONSE_HEADERS}}
+
+    ; Send DATA frame with response
+{{SLOT_SEND_DATA_FRAME}}
+
+    ; Send trailing HEADERS with grpc-status
+{{SLOT_SEND_TRAILERS}}
+    ret
+
+.send_grpc_error:
+    ; Input: r18 = grpc status code, r0 = error message ptr, r1 = message len
+{{SLOT_SEND_GRPC_ERROR}}
+    ret
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.close_connection:
+    ; Send GOAWAY frame
+{{SLOT_SEND_GOAWAY}}
+
+    mov r0, r11
+    io.close r0, r0
+    b .accept_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

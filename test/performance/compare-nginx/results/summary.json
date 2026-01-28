@@ -1,0 +1,16 @@
+{
+    "nginx": {
+        "requests_per_second": 58572.36,
+        "mean_time_ms": ,
+        "p99_ms": 0
+    },
+    "aibpl": {
+        "requests_per_second": 48711.10,
+        "mean_time_ms": ,
+        "p99_ms": 1
+    },
+    "comparison": {
+        "aibpl_faster_by_percent": -16.00,
+        "aibpl_to_nginx_ratio": .83
+    }
+}

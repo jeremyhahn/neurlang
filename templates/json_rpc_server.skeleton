@@ -1,0 +1,350 @@
+; JSON-RPC 2.0 Server Skeleton Template
+; Protocol: JSON-RPC 2.0 over {{TRANSPORT}}
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for a JSON-RPC 2.0 server.
+; Supports both HTTP and raw TCP transports.
+; Handles batched requests, notifications, and full error codes.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD
+;   r12: Request/response length
+;   r13: JSON-RPC request ID (0 for notification)
+;   r14: Method name hash (for fast dispatch)
+;   r15: Request buffer pointer
+;   r16: Params object pointer
+;   r17: Result buffer pointer
+;   r18: Is batch request (0/1)
+;
+; JSON-RPC Error Codes:
+;   -32700: Parse error
+;   -32600: Invalid Request
+;   -32601: Method not found
+;   -32602: Invalid params
+;   -32603: Internal error
+;   -32000 to -32099: Server error (reserved)
+
+.data:
+    ; Server configuration
+    port:           .word {{PORT}}
+    backlog:        .word 128
+
+    ; Transport type: 1=HTTP, 2=TCP
+    transport:      .word {{TRANSPORT_TYPE}}
+
+    ; JSON-RPC version
+    jsonrpc_version:    .string "2.0"
+    jsonrpc_version_len: .word 3
+
+    ; Error codes
+    ERR_PARSE:          .word -32700
+    ERR_INVALID_REQ:    .word -32600
+    ERR_METHOD_NOT_FOUND: .word -32601
+    ERR_INVALID_PARAMS: .word -32602
+    ERR_INTERNAL:       .word -32603
+
+    ; Response templates
+    resp_success_prefix:    .string "{\"jsonrpc\":\"2.0\",\"result\":"
+    resp_success_prefix_len: .word 26
+    resp_id_prefix:         .string ",\"id\":"
+    resp_id_prefix_len:     .word 6
+    resp_suffix:            .string "}"
+    resp_suffix_len:        .word 1
+
+    ; Error response template
+    resp_error_prefix:      .string "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":"
+    resp_error_prefix_len:  .word 33
+    resp_error_msg:         .string ",\"message\":\""
+    resp_error_msg_len:     .word 12
+    resp_error_close:       .string "\"}"
+    resp_error_close_len:   .word 2
+
+    ; Standard error messages
+    err_msg_parse:          .string "Parse error"
+    err_msg_parse_len:      .word 11
+    err_msg_invalid:        .string "Invalid Request"
+    err_msg_invalid_len:    .word 15
+    err_msg_method:         .string "Method not found"
+    err_msg_method_len:     .word 16
+    err_msg_params:         .string "Invalid params"
+    err_msg_params_len:     .word 14
+    err_msg_internal:       .string "Internal error"
+    err_msg_internal_len:   .word 14
+
+    ; HTTP headers (for HTTP transport)
+    http_resp_header:       .string "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+    http_resp_header_len:   .word 64
+    http_crlf:              .string "\r\n\r\n"
+    http_crlf_len:          .word 4
+
+    ; Buffers
+    recv_buf:       .space 65536
+    send_buf:       .space 65536
+    result_buf:     .space 8192
+    method_buf:     .space 256
+    params_buf:     .space 32768
+    batch_buf:      .space 65536
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Listen
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+; ============================================================================
+; Accept Loop
+; ============================================================================
+.accept_loop:
+    mov r0, r10
+    io.accept r11, r0
+    b .handle_request
+
+; ============================================================================
+; Request Handling
+; ============================================================================
+.handle_request:
+    ; Read request
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 65536
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    lea r15, recv_buf
+
+    ; Check transport type
+    load r0, [transport]
+    mov r1, 1               ; HTTP
+    beq r0, r1, .parse_http_request
+    b .parse_json_rpc
+
+.parse_http_request:
+    ; Skip HTTP headers, find body
+{{SLOT_PARSE_HTTP_BODY}}
+    ; r15 now points to JSON body, r12 = body length
+
+.parse_json_rpc:
+    ; Check if batch request (starts with '[')
+    load.b r0, [r15]
+    mov r1, 0x5B            ; '['
+    beq r0, r1, .handle_batch
+
+    mov r18, 0              ; Not batch
+    b .parse_single_request
+
+; ============================================================================
+; Single Request Processing
+; ============================================================================
+.parse_single_request:
+    ; Parse JSON-RPC request
+    ; Extract: jsonrpc, method, params, id
+{{SLOT_PARSE_JSONRPC_REQUEST}}
+    ; r13 = id (0 if notification)
+    ; r14 = method hash
+    ; r16 = params pointer
+
+    ; Validate jsonrpc version
+{{SLOT_VALIDATE_VERSION}}
+
+    ; Dispatch to method handler
+{{SLOT_METHOD_DISPATCH}}
+
+    ; Method not found
+    b .error_method_not_found
+
+; ============================================================================
+; Method Handlers
+; ============================================================================
+{{METHOD_HANDLERS}}
+
+; ============================================================================
+; Batch Request Processing
+; ============================================================================
+.handle_batch:
+    mov r18, 1              ; Is batch
+    lea r17, batch_buf      ; Result accumulator
+
+    ; Start batch response array
+    mov r0, 0x5B            ; '['
+    store.b r0, [r17]
+    addi r17, r17, 1
+
+{{SLOT_PROCESS_BATCH}}
+
+    ; Close batch response array
+    mov r0, 0x5D            ; ']'
+    store.b r0, [r17]
+    addi r17, r17, 1
+
+    ; Send batch response
+    lea r0, batch_buf
+    sub r1, r17, r0         ; length
+    b .send_response
+
+; ============================================================================
+; Response Building
+; ============================================================================
+.build_success_response:
+    ; Input: r0 = result JSON string, r1 = result length
+    ; r13 = request id
+    lea r17, send_buf
+
+    ; {"jsonrpc":"2.0","result":
+    lea r2, resp_success_prefix
+    load r3, [resp_success_prefix_len]
+{{SLOT_COPY_STRING}}
+
+    ; Copy result
+{{SLOT_COPY_RESULT}}
+
+    ; ,"id":
+    lea r2, resp_id_prefix
+    load r3, [resp_id_prefix_len]
+{{SLOT_COPY_STRING}}
+
+    ; Copy id (as number or string)
+{{SLOT_COPY_ID}}
+
+    ; }
+    lea r2, resp_suffix
+    load r3, [resp_suffix_len]
+{{SLOT_COPY_STRING}}
+
+    ; Calculate total length and send
+    lea r0, send_buf
+    sub r1, r17, r0
+    b .send_response
+
+.build_error_response:
+    ; Input: r0 = error code, r1 = message ptr, r2 = message len
+    ; r13 = request id (may be null)
+    lea r17, send_buf
+
+{{SLOT_BUILD_ERROR_JSON}}
+
+    lea r0, send_buf
+    sub r1, r17, r0
+    b .send_response
+
+; ============================================================================
+; Standard Errors
+; ============================================================================
+.error_parse:
+    load r0, [ERR_PARSE]
+    lea r1, err_msg_parse
+    load r2, [err_msg_parse_len]
+    b .build_error_response
+
+.error_invalid_request:
+    load r0, [ERR_INVALID_REQ]
+    lea r1, err_msg_invalid
+    load r2, [err_msg_invalid_len]
+    b .build_error_response
+
+.error_method_not_found:
+    load r0, [ERR_METHOD_NOT_FOUND]
+    lea r1, err_msg_method
+    load r2, [err_msg_method_len]
+    b .build_error_response
+
+.error_invalid_params:
+    load r0, [ERR_INVALID_PARAMS]
+    lea r1, err_msg_params
+    load r2, [err_msg_params_len]
+    b .build_error_response
+
+.error_internal:
+    load r0, [ERR_INTERNAL]
+    lea r1, err_msg_internal
+    load r2, [err_msg_internal_len]
+    b .build_error_response
+
+; ============================================================================
+; Send Response
+; ============================================================================
+.send_response:
+    ; Input: r0 = response buffer, r1 = response length
+    ; Check transport type
+    load r2, [transport]
+    mov r3, 1               ; HTTP
+    beq r2, r3, .send_http_response
+
+    ; Raw TCP: just send JSON
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+    ; Check if notification (no response needed was already handled)
+    b .continue_or_close
+
+.send_http_response:
+    ; Send HTTP headers
+    mov r3, r11
+    lea r4, http_resp_header
+    load r5, [http_resp_header_len]
+    io.send r3, r3, r4, r5
+
+    ; Send Content-Length value
+{{SLOT_SEND_CONTENT_LENGTH}}
+
+    ; Send header terminator
+    lea r4, http_crlf
+    load r5, [http_crlf_len]
+    io.send r3, r3, r4, r5
+
+    ; Send body
+    io.send r3, r3, r0, r1
+
+    b .continue_or_close
+
+.continue_or_close:
+    ; For HTTP, close after response
+    load r0, [transport]
+    mov r1, 1
+    beq r0, r1, .close_connection
+
+    ; For TCP, continue receiving
+    b .handle_request
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.close_connection:
+    mov r0, r11
+    io.close r0, r0
+    b .accept_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

@@ -1,0 +1,258 @@
+; ============================================================================
+; HTTP CLIENT TEMPLATE
+; ============================================================================
+; Template for making HTTP requests with response handling
+;
+; Slot Types Used:
+;   - ExtensionCall: HTTP GET/POST/PUT/DELETE operations
+;   - ResponseBuilder: Build request URLs and bodies
+;   - PatternMatch: Parse response status and headers
+;   - BufferRead/Write: Handle response body
+;   - ErrorResponse: Handle HTTP errors
+;
+; Register Conventions:
+;   r0-r3:  Function arguments, return values
+;   r10:    Base URL pointer
+;   r11:    Response handle (from HTTP extension)
+;   r12:    Response status code
+;   r13:    Response body pointer
+;   r14:    Response body length
+;   r15:    Temp/scratch
+;
+; Extension IDs Used:
+;   HTTP_GET (190), HTTP_POST (191), HTTP_PUT (192), HTTP_DELETE (193)
+;   HTTP_RESPONSE_STATUS (194), HTTP_RESPONSE_BODY (195), HTTP_RESPONSE_FREE (196)
+;   HTTP_GET_WITH_HEADERS (197), HTTP_POST_WITH_HEADERS (198)
+;
+; ============================================================================
+
+.data:
+    ; Configuration
+    base_url:        .asciiz "{{BASE_URL}}"
+    content_type:    .asciiz "application/json"
+    auth_header:     .asciiz "Authorization: Bearer "
+
+    ; Request buffers
+    url_buffer:      .space 2048      ; Built URL
+    body_buffer:     .space 8192      ; Request body
+    headers_buffer:  .space 2048      ; Custom headers
+
+    ; Response buffers
+    response_buffer: .space 65536     ; Response body (64KB)
+
+    ; Error messages
+    err_network:     .asciiz "Error: Network request failed\n"
+    err_timeout:     .asciiz "Error: Request timed out\n"
+    err_parse:       .asciiz "Error: Failed to parse response\n"
+
+.text:
+
+; ============================================================================
+; ENTRY POINT
+; ============================================================================
+.entry:
+    ; Initialize
+    mov r10, base_url
+
+    ; {{SLOT_SETUP_REQUEST}}
+    ; Slot: Build the request based on operation type
+    ; Sets up URL, headers, body as needed
+
+    b .execute_request
+
+; ============================================================================
+; HTTP GET REQUEST
+; ============================================================================
+.http_get:
+    ; Input: r0 = URL path (e.g., "/users/123")
+    ; Output: r11 = response handle
+
+    ; Build full URL
+    mov r1, url_buffer
+    call .build_url
+
+    ; Make GET request
+    mov r0, url_buffer
+    ext.call HTTP_GET, r0
+    mov r11, r0             ; Save response handle
+
+    b .handle_response
+
+; ============================================================================
+; HTTP POST REQUEST
+; ============================================================================
+.http_post:
+    ; Input: r0 = URL path, r1 = body pointer, r2 = body length
+    ; Output: r11 = response handle
+
+    ; Save body info
+    mov r4, r1              ; body pointer
+    mov r5, r2              ; body length
+
+    ; Build full URL
+    mov r1, url_buffer
+    call .build_url
+
+    ; Make POST request
+    mov r0, url_buffer
+    mov r1, r4              ; body
+    mov r2, r5              ; length
+    mov r3, content_type
+    ext.call HTTP_POST, r0, r1, r2, r3
+    mov r11, r0
+
+    b .handle_response
+
+; ============================================================================
+; HTTP PUT REQUEST
+; ============================================================================
+.http_put:
+    ; Input: r0 = URL path, r1 = body pointer, r2 = body length
+    ; Output: r11 = response handle
+
+    mov r4, r1
+    mov r5, r2
+
+    mov r1, url_buffer
+    call .build_url
+
+    mov r0, url_buffer
+    mov r1, r4
+    mov r2, r5
+    mov r3, content_type
+    ext.call HTTP_PUT, r0, r1, r2, r3
+    mov r11, r0
+
+    b .handle_response
+
+; ============================================================================
+; HTTP DELETE REQUEST
+; ============================================================================
+.http_delete:
+    ; Input: r0 = URL path
+    ; Output: r11 = response handle
+
+    mov r1, url_buffer
+    call .build_url
+
+    mov r0, url_buffer
+    ext.call HTTP_DELETE, r0
+    mov r11, r0
+
+    b .handle_response
+
+; ============================================================================
+; EXECUTE REQUEST (generic entry point)
+; ============================================================================
+.execute_request:
+    ; {{SLOT_EXECUTE_REQUEST}}
+    ; Slot: Execute the appropriate HTTP method
+    ; Uses: r0 = path, r1 = body (optional), r2 = length (optional)
+    ; Jumps to: .http_get, .http_post, .http_put, or .http_delete
+
+    b .http_get             ; Default to GET
+
+; ============================================================================
+; HANDLE RESPONSE
+; ============================================================================
+.handle_response:
+    ; Check if request succeeded
+    beq r11, zero, .network_error
+
+    ; Get status code
+    mov r0, r11
+    ext.call HTTP_RESPONSE_STATUS, r0
+    mov r12, r0             ; Save status code
+
+    ; Get response body
+    mov r0, r11
+    mov r1, response_buffer
+    mov r2, 65536           ; Max size
+    ext.call HTTP_RESPONSE_BODY, r0, r1, r2
+    mov r13, response_buffer
+    mov r14, r0             ; Body length
+
+    ; {{SLOT_CHECK_STATUS}}
+    ; Slot: RangeCheck on status code
+    ; Input: r12 = status code
+    ; Jumps to: .status_2xx, .status_4xx, .status_5xx, etc.
+
+    ; Default: check for 2xx success
+    mov r0, r12
+    mov r1, 200
+    blt r0, r1, .status_error
+    mov r1, 300
+    bge r0, r1, .status_error
+
+    b .status_success
+
+.status_success:
+    ; {{SLOT_PROCESS_RESPONSE}}
+    ; Slot: Parse and process successful response
+    ; Input: r13 = body pointer, r14 = body length
+    ; Output: Depends on application
+
+    b .cleanup
+
+.status_error:
+    ; {{SLOT_HANDLE_ERROR}}
+    ; Slot: Handle HTTP error response
+    ; Input: r12 = status code, r13 = body, r14 = length
+
+    b .cleanup
+
+.network_error:
+    mov r0, err_network
+    sys.call PRINT_ERR, r0
+    mov r0, 1
+    b .exit
+
+; ============================================================================
+; CLEANUP AND EXIT
+; ============================================================================
+.cleanup:
+    ; Free response handle
+    beq r11, zero, .exit
+    mov r0, r11
+    ext.call HTTP_RESPONSE_FREE, r0
+    mov r0, 0
+
+.exit:
+    halt
+
+; ============================================================================
+; UTILITY: Build full URL from base + path
+; ============================================================================
+.build_url:
+    ; Input: r0 = path, r1 = destination buffer
+    ; Output: r1 = destination with full URL
+
+    ; Copy base URL
+    mov r2, r10             ; base_url
+    mov r3, r1              ; dest
+.build_url_base:
+    load.b r4, [r2]
+    beq r4, zero, .build_url_path
+    store.b r4, [r3]
+    addi r2, r2, 1
+    addi r3, r3, 1
+    b .build_url_base
+
+.build_url_path:
+    ; Copy path
+.build_url_path_loop:
+    load.b r4, [r0]
+    store.b r4, [r3]
+    beq r4, zero, .build_url_done
+    addi r0, r0, 1
+    addi r3, r3, 1
+    b .build_url_path_loop
+
+.build_url_done:
+    ret
+
+; ============================================================================
+; DATA SECTION FOR SLOTS
+; ============================================================================
+
+{{DATA_ITEMS}}

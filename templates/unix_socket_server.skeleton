@@ -1,0 +1,189 @@
+; Unix Domain Socket Server Skeleton Template
+; Protocol: {{PROTOCOL_NAME}}
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for IPC via Unix domain sockets.
+; Supports both stream (SOCK_STREAM) and datagram (SOCK_DGRAM) modes.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD (stream mode)
+;   r12: Message length
+;   r13: Connection state
+;   r14: Application data handle
+;   r15: Buffer pointer
+;
+; Data section:
+;   socket_path: Path to Unix socket file
+;   recv_buf/send_buf: I/O buffers
+
+.data:
+    ; Socket configuration
+    socket_path:    .string "{{SOCKET_PATH}}"
+    socket_path_len: .word {{SOCKET_PATH_LEN}}
+
+    ; Address family constants
+    AF_UNIX:        .word 1
+    SOCK_STREAM:    .word 1
+    SOCK_DGRAM:     .word 2
+
+    ; Use stream or datagram
+    socket_type:    .word {{SOCKET_TYPE}}  ; 1=STREAM, 2=DGRAM
+
+    ; Backlog for stream mode
+    backlog:        .word 128
+
+    ; Buffers
+    recv_buf:       .space 8192
+    send_buf:       .space 8192
+
+    ; Protocol-specific data
+    greeting:       .string "{{GREETING}}"
+    greeting_len:   .word {{GREETING_LEN}}
+
+    ; Error responses
+    err_invalid:        .string "{{ERROR_INVALID}}"
+    err_invalid_len:    .word {{ERROR_INVALID_LEN}}
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Remove existing socket file (if any)
+    lea r0, socket_path
+    io.unlink r0, r0        ; Ignore error if doesn't exist
+
+    ; Create Unix socket
+    load r0, [AF_UNIX]
+    load r1, [socket_type]
+    mov r2, 0               ; protocol
+    io.socket r10, r0, r1, r2
+
+    ; Bind to socket path
+    mov r0, r10
+    lea r1, socket_path
+    io.bind_unix r0, r0, r1
+
+    ; Check socket type and branch
+    load r0, [socket_type]
+    load r1, [SOCK_STREAM]
+    beq r0, r1, .stream_mode_init
+    b .dgram_mode_loop
+
+; ============================================================================
+; Stream Mode - TCP-like with connections
+; ============================================================================
+.stream_mode_init:
+    ; Listen for connections
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+.stream_accept_loop:
+    ; Accept new connection
+    mov r0, r10
+    io.accept r11, r0
+
+    ; Initialize connection state
+    mov r13, 0
+
+    ; Send greeting
+    lea r0, greeting
+    load r1, [greeting_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+    b .stream_command_loop
+
+.stream_command_loop:
+    ; Read from client
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 8192
+    io.recv r12, r0, r1, r2
+
+    ; Check for disconnect
+    beqz r12, .stream_client_disconnect
+
+    ; Store buffer pointer
+    lea r15, recv_buf
+
+    ; Parse and dispatch
+{{SLOT_PARSE_COMMAND}}
+
+{{SLOT_COMMAND_DISPATCH}}
+
+    b .stream_command_loop
+
+.stream_client_disconnect:
+    mov r0, r11
+    io.close r0, r0
+    b .stream_accept_loop
+
+; ============================================================================
+; Stream Mode Command Handlers
+; ============================================================================
+{{STREAM_HANDLERS}}
+
+; ============================================================================
+; Datagram Mode - UDP-like, connectionless
+; ============================================================================
+.dgram_mode_loop:
+    ; Receive datagram
+    mov r0, r10
+    lea r1, recv_buf
+    mov r2, 8192
+    io.recv r12, r0, r1, r2
+
+    ; Store buffer pointer
+    lea r15, recv_buf
+
+    ; Parse and dispatch
+{{SLOT_PARSE_MESSAGE}}
+
+{{SLOT_MESSAGE_DISPATCH}}
+
+    b .dgram_mode_loop
+
+; ============================================================================
+; Datagram Mode Message Handlers
+; ============================================================================
+{{DGRAM_HANDLERS}}
+
+; ============================================================================
+; Response Helpers
+; ============================================================================
+.send_stream_response:
+    ; Input: r0 = buffer, r1 = length
+    mov r2, r11             ; client socket
+    io.send r2, r2, r0, r1
+    ret
+
+.send_error:
+    lea r0, err_invalid
+    load r1, [err_invalid_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .stream_command_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+; ============================================================================
+; Cleanup
+; ============================================================================
+.exit:
+    ; Close socket
+    mov r0, r10
+    io.close r0, r0
+
+    ; Remove socket file
+    lea r0, socket_path
+    io.unlink r0, r0
+
+    halt

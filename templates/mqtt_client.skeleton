@@ -1,0 +1,366 @@
+; MQTT Client Skeleton Template
+; Protocol: MQTT 3.1.1 / 5.0
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for an MQTT client.
+; Supports publish/subscribe patterns for IoT and messaging.
+;
+; Register conventions:
+;   r10: Broker socket FD
+;   r11: Connection state (0=disconnected, 1=connecting, 2=connected)
+;   r12: Message length
+;   r13: Packet type
+;   r14: Packet ID (for QoS > 0)
+;   r15: Buffer pointer
+;   r16: Payload pointer
+;   r17: Payload length
+;   r18: QoS level
+;
+; MQTT Packet Types:
+;   1: CONNECT
+;   2: CONNACK
+;   3: PUBLISH
+;   4: PUBACK
+;   5: PUBREC
+;   6: PUBREL
+;   7: PUBCOMP
+;   8: SUBSCRIBE
+;   9: SUBACK
+;   10: UNSUBSCRIBE
+;   11: UNSUBACK
+;   12: PINGREQ
+;   13: PINGRESP
+;   14: DISCONNECT
+
+.data:
+    ; Broker configuration
+    broker_host:    .string "{{BROKER_HOST}}"
+    broker_host_len: .word {{BROKER_HOST_LEN}}
+    broker_port:    .word {{BROKER_PORT}}
+
+    ; Client configuration
+    client_id:      .string "{{CLIENT_ID}}"
+    client_id_len:  .word {{CLIENT_ID_LEN}}
+    username:       .string "{{USERNAME}}"
+    username_len:   .word {{USERNAME_LEN}}
+    password:       .string "{{PASSWORD}}"
+    password_len:   .word {{PASSWORD_LEN}}
+
+    ; Connection flags
+    use_auth:       .word {{USE_AUTH}}      ; 0 or 1
+    clean_session:  .word {{CLEAN_SESSION}} ; 0 or 1
+    keep_alive:     .word {{KEEP_ALIVE}}    ; seconds
+
+    ; MQTT packet types
+    PKT_CONNECT:    .word 1
+    PKT_CONNACK:    .word 2
+    PKT_PUBLISH:    .word 3
+    PKT_PUBACK:     .word 4
+    PKT_SUBSCRIBE:  .word 8
+    PKT_SUBACK:     .word 9
+    PKT_UNSUBSCRIBE: .word 10
+    PKT_UNSUBACK:   .word 11
+    PKT_PINGREQ:    .word 12
+    PKT_PINGRESP:   .word 13
+    PKT_DISCONNECT: .word 14
+
+    ; QoS levels
+    QOS_0:          .word 0     ; At most once
+    QOS_1:          .word 1     ; At least once
+    QOS_2:          .word 2     ; Exactly once
+
+    ; Connection states
+    STATE_DISCONNECTED: .word 0
+    STATE_CONNECTING:   .word 1
+    STATE_CONNECTED:    .word 2
+
+    ; Packet ID counter
+    packet_id:      .word 1
+
+    ; Buffers
+    recv_buf:       .space 65536
+    send_buf:       .space 65536
+    topic_buf:      .space 1024
+    payload_buf:    .space 32768
+
+    ; Subscribed topics
+{{SUBSCRIPTION_DATA}}
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Client Initialization
+; ============================================================================
+.entry:
+    mov r11, 0              ; STATE_DISCONNECTED
+    b .connect_to_broker
+
+; ============================================================================
+; Connect to Broker
+; ============================================================================
+.connect_to_broker:
+    ; Create socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0
+    io.socket r10, r0, r1, r2
+
+    ; Resolve and connect to broker
+    lea r0, broker_host
+    load r1, [broker_port]
+    io.connect r10, r10, r0, r1
+
+    ; Update state
+    mov r11, 1              ; STATE_CONNECTING
+
+    ; Build and send CONNECT packet
+{{SLOT_BUILD_CONNECT_PACKET}}
+
+    mov r0, r10
+    lea r1, send_buf
+    ; r12 = packet length from slot
+    io.send r0, r0, r1, r12
+
+    ; Wait for CONNACK
+    b .wait_connack
+
+.wait_connack:
+    mov r0, r10
+    lea r1, recv_buf
+    mov r2, 65536
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .connection_lost
+
+    ; Parse CONNACK
+{{SLOT_PARSE_CONNACK}}
+    ; Returns: r0 = return code (0 = success)
+
+    bnez r0, .connect_failed
+
+    ; Connected successfully
+    mov r11, 2              ; STATE_CONNECTED
+
+    ; Subscribe to configured topics
+{{SLOT_SUBSCRIBE_TOPICS}}
+
+    ; Call on_connect handler
+{{SLOT_ON_CONNECT}}
+
+    b .message_loop
+
+.connect_failed:
+    ; Handle connection rejection
+{{SLOT_ON_CONNECT_ERROR}}
+    b .reconnect_delay
+
+; ============================================================================
+; Main Message Loop
+; ============================================================================
+.message_loop:
+    ; Read packet with timeout (for keep-alive)
+    mov r0, r10
+    lea r1, recv_buf
+    mov r2, 65536
+    io.recv_timeout r12, r0, r1, r2, [keep_alive]
+
+    ; Timeout - send PINGREQ
+    bltz r12, .send_ping
+
+    ; Connection closed
+    beqz r12, .connection_lost
+
+    ; Parse packet type
+    lea r15, recv_buf
+    load.b r13, [r15]
+    srl r13, r13, 4         ; Upper 4 bits = packet type
+
+    ; Dispatch
+    load r0, [PKT_PUBLISH]
+    beq r13, r0, .handle_publish
+
+    load r0, [PKT_PUBACK]
+    beq r13, r0, .handle_puback
+
+    load r0, [PKT_SUBACK]
+    beq r13, r0, .handle_suback
+
+    load r0, [PKT_PINGRESP]
+    beq r13, r0, .handle_pingresp
+
+    load r0, [PKT_DISCONNECT]
+    beq r13, r0, .handle_disconnect
+
+    ; Unknown packet, continue
+    b .message_loop
+
+; ============================================================================
+; Packet Handlers
+; ============================================================================
+.handle_publish:
+    ; Parse PUBLISH packet
+{{SLOT_PARSE_PUBLISH}}
+    ; r16 = topic ptr, r17 = topic len
+    ; r18 = payload ptr, r19 = payload len
+    ; r14 = packet ID (if QoS > 0)
+    ; r20 = QoS level
+
+    ; Call message handler
+{{SLOT_ON_MESSAGE}}
+
+    ; Send PUBACK if QoS 1
+    load r0, [QOS_1]
+    beq r20, r0, .send_puback
+
+    ; Send PUBREC if QoS 2
+    load r0, [QOS_2]
+    beq r20, r0, .send_pubrec
+
+    b .message_loop
+
+.send_puback:
+{{SLOT_BUILD_PUBACK}}
+    mov r0, r10
+    lea r1, send_buf
+    mov r2, 4               ; PUBACK is 4 bytes
+    io.send r0, r0, r1, r2
+    b .message_loop
+
+.send_pubrec:
+{{SLOT_BUILD_PUBREC}}
+    mov r0, r10
+    lea r1, send_buf
+    mov r2, 4
+    io.send r0, r0, r1, r2
+    b .message_loop
+
+.handle_puback:
+    ; QoS 1 publish acknowledged
+{{SLOT_ON_PUBACK}}
+    b .message_loop
+
+.handle_suback:
+    ; Subscription acknowledged
+{{SLOT_ON_SUBACK}}
+    b .message_loop
+
+.handle_pingresp:
+    ; Keep-alive confirmed
+    b .message_loop
+
+.handle_disconnect:
+    ; Broker disconnected us
+    b .connection_lost
+
+; ============================================================================
+; Publish API
+; ============================================================================
+.publish:
+    ; Input: r0 = topic ptr, r1 = topic len
+    ;        r2 = payload ptr, r3 = payload len
+    ;        r4 = QoS, r5 = retain flag
+
+    ; Build PUBLISH packet
+{{SLOT_BUILD_PUBLISH}}
+
+    ; Send
+    mov r0, r10
+    lea r1, send_buf
+    ; r12 = packet length
+    io.send r0, r0, r1, r12
+    ret
+
+; ============================================================================
+; Subscribe API
+; ============================================================================
+.subscribe:
+    ; Input: r0 = topic filter ptr, r1 = topic len, r2 = QoS
+
+    ; Get next packet ID
+    load r14, [packet_id]
+    addi r3, r14, 1
+    store r3, [packet_id]
+
+    ; Build SUBSCRIBE packet
+{{SLOT_BUILD_SUBSCRIBE}}
+
+    ; Send
+    mov r0, r10
+    lea r1, send_buf
+    ; r12 = packet length
+    io.send r0, r0, r1, r12
+    ret
+
+; ============================================================================
+; Keep-Alive
+; ============================================================================
+.send_ping:
+    ; Build PINGREQ (2 bytes: 0xC0 0x00)
+    lea r0, send_buf
+    mov r1, 0xC0
+    store.b r1, [r0]
+    mov r1, 0x00
+    store.b r1, [r0 + 1]
+
+    mov r0, r10
+    lea r1, send_buf
+    mov r2, 2
+    io.send r0, r0, r1, r2
+    b .message_loop
+
+; ============================================================================
+; Connection Loss / Reconnect
+; ============================================================================
+.connection_lost:
+    mov r11, 0              ; STATE_DISCONNECTED
+
+    ; Close socket
+    mov r0, r10
+    io.close r0, r0
+
+{{SLOT_ON_DISCONNECT}}
+
+.reconnect_delay:
+    ; Wait before reconnecting
+    mov r0, 5000            ; 5 seconds
+    io.sleep r0, r0
+
+    b .connect_to_broker
+
+; ============================================================================
+; Graceful Disconnect
+; ============================================================================
+.disconnect:
+    ; Build DISCONNECT packet (2 bytes: 0xE0 0x00)
+    lea r0, send_buf
+    mov r1, 0xE0
+    store.b r1, [r0]
+    mov r1, 0x00
+    store.b r1, [r0 + 1]
+
+    mov r0, r10
+    lea r1, send_buf
+    mov r2, 2
+    io.send r0, r0, r1, r2
+
+    ; Close socket
+    mov r0, r10
+    io.close r0, r0
+
+    mov r11, 0
+    halt
+
+; ============================================================================
+; Application Message Handlers
+; ============================================================================
+{{MESSAGE_HANDLERS}}
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    call .disconnect
+    halt

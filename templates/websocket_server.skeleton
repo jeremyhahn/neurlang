@@ -1,0 +1,269 @@
+; WebSocket Server Skeleton Template
+; Protocol: WebSocket (RFC 6455)
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for a WebSocket server.
+; Handles HTTP upgrade handshake, frame encoding/decoding, ping/pong.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD
+;   r12: Frame/message length
+;   r13: WebSocket state (0=HTTP, 1=OPEN, 2=CLOSING)
+;   r14: Frame opcode
+;   r15: Buffer pointer
+;   r16: Payload pointer
+;   r17: Payload length
+;   r18: Mask key (4 bytes packed)
+;
+; WebSocket opcodes:
+;   0x0: Continuation
+;   0x1: Text frame
+;   0x2: Binary frame
+;   0x8: Close
+;   0x9: Ping
+;   0xA: Pong
+
+.data:
+    ; Server configuration
+    port:           .word {{PORT}}
+    backlog:        .word 128
+
+    ; WebSocket states
+    WS_STATE_HTTP:      .word 0
+    WS_STATE_OPEN:      .word 1
+    WS_STATE_CLOSING:   .word 2
+
+    ; WebSocket opcodes
+    WS_OP_CONTINUATION: .word 0x0
+    WS_OP_TEXT:         .word 0x1
+    WS_OP_BINARY:       .word 0x2
+    WS_OP_CLOSE:        .word 0x8
+    WS_OP_PING:         .word 0x9
+    WS_OP_PONG:         .word 0xA
+
+    ; HTTP upgrade response template
+    ; Note: {{WS_ACCEPT}} computed from Sec-WebSocket-Key + magic
+    http_upgrade_resp:  .string "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
+    http_upgrade_len:   .word 97
+    http_upgrade_end:   .string "\r\n\r\n"
+    http_upgrade_end_len: .word 4
+
+    ; WebSocket magic string for handshake
+    ws_magic:       .string "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    ws_magic_len:   .word 36
+
+    ; HTTP headers to find
+    header_ws_key:      .string "Sec-WebSocket-Key: "
+    header_ws_key_len:  .word 19
+
+    ; Buffers
+    recv_buf:       .space 65536
+    send_buf:       .space 65536
+    frame_buf:      .space 65536
+    ws_key_buf:     .space 64       ; Client's Sec-WebSocket-Key
+    ws_accept_buf:  .space 64       ; Computed Sec-WebSocket-Accept
+    sha1_buf:       .space 20       ; SHA1 output
+
+    ; Close frame responses
+    close_normal:       .byte 0x88, 0x02, 0x03, 0xE8  ; Close with 1000 (normal)
+    close_normal_len:   .word 4
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Listen
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+; ============================================================================
+; Accept Loop
+; ============================================================================
+.accept_loop:
+    mov r0, r10
+    io.accept r11, r0
+
+    ; Start in HTTP state (awaiting upgrade)
+    mov r13, 0              ; WS_STATE_HTTP
+
+    b .handle_http_upgrade
+
+; ============================================================================
+; HTTP Upgrade Handshake
+; ============================================================================
+.handle_http_upgrade:
+    ; Read HTTP request
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 8192
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    ; Extract Sec-WebSocket-Key header
+{{SLOT_EXTRACT_WS_KEY}}
+
+    ; Compute Sec-WebSocket-Accept
+    ; accept = base64(sha1(key + magic))
+{{SLOT_COMPUTE_WS_ACCEPT}}
+
+    ; Send upgrade response
+    mov r0, r11
+    lea r1, http_upgrade_resp
+    load r2, [http_upgrade_len]
+    io.send r0, r0, r1, r2
+
+    ; Send computed accept value
+    lea r1, ws_accept_buf
+    mov r2, 28              ; Base64 of SHA1 is always 28 chars
+    io.send r0, r0, r1, r2
+
+    ; Send response terminator
+    lea r1, http_upgrade_end
+    load r2, [http_upgrade_end_len]
+    io.send r0, r0, r1, r2
+
+    ; Transition to OPEN state
+    mov r13, 1              ; WS_STATE_OPEN
+
+    ; Call connection opened handler
+{{SLOT_ON_OPEN}}
+
+    b .ws_frame_loop
+
+; ============================================================================
+; WebSocket Frame Processing Loop
+; ============================================================================
+.ws_frame_loop:
+    ; Read frame header (at least 2 bytes)
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 65536
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    ; Parse frame header
+{{SLOT_PARSE_WS_FRAME}}
+
+    ; r14 = opcode, r16 = payload ptr, r17 = payload len, r18 = mask
+
+    ; Unmask payload (client frames are always masked)
+{{SLOT_UNMASK_PAYLOAD}}
+
+    ; Dispatch based on opcode
+    load r0, [WS_OP_TEXT]
+    beq r14, r0, .handle_text_frame
+
+    load r0, [WS_OP_BINARY]
+    beq r14, r0, .handle_binary_frame
+
+    load r0, [WS_OP_PING]
+    beq r14, r0, .handle_ping
+
+    load r0, [WS_OP_PONG]
+    beq r14, r0, .handle_pong
+
+    load r0, [WS_OP_CLOSE]
+    beq r14, r0, .handle_close_frame
+
+    ; Unknown opcode, close with protocol error
+    b .close_protocol_error
+
+; ============================================================================
+; Frame Handlers
+; ============================================================================
+.handle_text_frame:
+    ; r16 = text payload, r17 = length
+{{SLOT_ON_TEXT_MESSAGE}}
+    b .ws_frame_loop
+
+.handle_binary_frame:
+    ; r16 = binary payload, r17 = length
+{{SLOT_ON_BINARY_MESSAGE}}
+    b .ws_frame_loop
+
+.handle_ping:
+    ; Respond with pong (same payload)
+{{SLOT_SEND_PONG}}
+    b .ws_frame_loop
+
+.handle_pong:
+    ; Pong received (typically ignore)
+    b .ws_frame_loop
+
+.handle_close_frame:
+    ; Send close frame back
+    mov r13, 2              ; WS_STATE_CLOSING
+    lea r0, close_normal
+    load r1, [close_normal_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .close_connection
+
+.close_protocol_error:
+    ; Send close with 1002 (protocol error)
+    mov r13, 2
+    ; Close frame with 1002
+    b .close_connection
+
+; ============================================================================
+; Application Message Handlers
+; ============================================================================
+{{MESSAGE_HANDLERS}}
+
+; ============================================================================
+; Send Helpers
+; ============================================================================
+.send_text_frame:
+    ; Input: r0 = text ptr, r1 = text length
+    ; Build frame header and send
+{{SLOT_BUILD_TEXT_FRAME}}
+    ret
+
+.send_binary_frame:
+    ; Input: r0 = data ptr, r1 = data length
+{{SLOT_BUILD_BINARY_FRAME}}
+    ret
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.close_connection:
+{{SLOT_ON_CLOSE}}
+    mov r0, r11
+    io.close r0, r0
+    b .accept_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

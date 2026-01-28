@@ -1,0 +1,7 @@
+# Neurlang Training Dependencies
+# Install with: pip install -r requirements.txt
+
+torch>=2.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+onnx>=1.14.0

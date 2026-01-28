@@ -1,0 +1,311 @@
+{
+  "name": "redis",
+  "description": "Redis Serialization Protocol (RESP)",
+  "version": "1.0",
+  "transport": "tcp",
+  "port": 6379,
+  "line_ending": "\r\n",
+  "states": [
+    {
+      "name": "READY",
+      "initial": true,
+      "description": "Ready to accept commands"
+    },
+    {
+      "name": "MULTI",
+      "description": "In MULTI transaction"
+    },
+    {
+      "name": "SUBSCRIBE",
+      "description": "In pub/sub mode"
+    },
+    {
+      "name": "CLOSE",
+      "terminal": true,
+      "description": "Connection closing"
+    }
+  ],
+  "commands": [
+    {
+      "name": "PING",
+      "pattern": "PING",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "simple_response",
+        "response": "+PONG\r\n"
+      }
+    },
+    {
+      "name": "PING_MSG",
+      "pattern": "PING {message}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "simple_response",
+        "response": "+{message}\r\n"
+      }
+    },
+    {
+      "name": "ECHO",
+      "pattern": "ECHO {message}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "simple_response",
+        "response": "${length}\r\n{message}\r\n"
+      }
+    },
+    {
+      "name": "SET",
+      "pattern": "SET {key} {value}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "PatternMatch",
+            "comment": "Parse SET key value"
+          },
+          {
+            "type": "ExtensionCall",
+            "extension": "redis set key value",
+            "comment": "Store in hash table"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "+OK\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GET",
+      "pattern": "GET {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "PatternMatch",
+            "comment": "Parse GET key"
+          },
+          {
+            "type": "ExtensionCall",
+            "extension": "redis get key",
+            "comment": "Lookup in hash table"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "${length}\r\n{value}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DEL",
+      "pattern": "DEL {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "redis delete key"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": ":{count}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EXISTS",
+      "pattern": "EXISTS {key}",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "redis key exists"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": ":{result}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "INCR",
+      "pattern": "INCR {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "redis increment key"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": ":{value}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DECR",
+      "pattern": "DECR {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "redis decrement key"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": ":{value}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LPUSH",
+      "pattern": "LPUSH {key} {value}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "redis list push left"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": ":{length}\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RPUSH",
+      "pattern": "RPUSH {key} {value}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom"
+      }
+    },
+    {
+      "name": "LPOP",
+      "pattern": "LPOP {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom"
+      }
+    },
+    {
+      "name": "RPOP",
+      "pattern": "RPOP {key}",
+      "valid_states": ["READY", "MULTI"],
+      "handler": {
+        "type": "custom"
+      }
+    },
+    {
+      "name": "MULTI",
+      "pattern": "MULTI",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "simple_response",
+        "response": "+OK\r\n",
+        "next_state": "MULTI"
+      }
+    },
+    {
+      "name": "EXEC",
+      "pattern": "EXEC",
+      "valid_states": ["MULTI"],
+      "handler": {
+        "type": "custom",
+        "next_state": "READY"
+      }
+    },
+    {
+      "name": "DISCARD",
+      "pattern": "DISCARD",
+      "valid_states": ["MULTI"],
+      "handler": {
+        "type": "simple_response",
+        "response": "+OK\r\n",
+        "next_state": "READY"
+      }
+    },
+    {
+      "name": "INFO",
+      "pattern": "INFO",
+      "valid_states": ["READY"],
+      "handler": {
+        "type": "custom"
+      }
+    },
+    {
+      "name": "QUIT",
+      "pattern": "QUIT",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "close_connection",
+        "response": "+OK\r\n"
+      }
+    }
+  ],
+  "errors": {
+    "syntax": "-ERR syntax error\r\n",
+    "wrong_type": "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+    "unknown": "-ERR unknown command\r\n"
+  },
+  "tests": [
+    {
+      "name": "ping_pong",
+      "description": "Basic PING/PONG",
+      "steps": [
+        { "send": "PING\r\n", "expect": "+PONG\r\n" }
+      ]
+    },
+    {
+      "name": "set_get",
+      "description": "SET and GET a key",
+      "steps": [
+        { "send": "SET mykey myvalue\r\n", "expect": "+OK\r\n" },
+        { "send": "GET mykey\r\n", "expect_contains": "myvalue" }
+      ]
+    },
+    {
+      "name": "get_nonexistent",
+      "description": "GET a key that doesn't exist",
+      "steps": [
+        { "send": "GET nonexistent\r\n", "expect": "$-1\r\n" }
+      ]
+    },
+    {
+      "name": "incr_decr",
+      "description": "INCR and DECR operations",
+      "steps": [
+        { "send": "SET counter 10\r\n", "expect": "+OK\r\n" },
+        { "send": "INCR counter\r\n", "expect": ":11\r\n" },
+        { "send": "DECR counter\r\n", "expect": ":10\r\n" }
+      ]
+    },
+    {
+      "name": "multi_transaction",
+      "description": "MULTI/EXEC transaction",
+      "steps": [
+        { "send": "MULTI\r\n", "expect": "+OK\r\n" },
+        { "send": "SET tx_key tx_val\r\n", "expect": "+QUEUED\r\n" },
+        { "send": "GET tx_key\r\n", "expect": "+QUEUED\r\n" },
+        { "send": "EXEC\r\n", "expect_contains": "*" }
+      ]
+    }
+  ]
+}

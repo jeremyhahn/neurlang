@@ -1,0 +1,177 @@
+{
+  "name": "http",
+  "description": "Hypertext Transfer Protocol (HTTP/1.1)",
+  "version": "1.0",
+  "transport": "tcp",
+  "port": 80,
+  "line_ending": "\r\n",
+  "states": [
+    {
+      "name": "INIT",
+      "initial": true,
+      "description": "Waiting for request"
+    },
+    {
+      "name": "HEADERS",
+      "description": "Reading request headers"
+    },
+    {
+      "name": "BODY",
+      "description": "Reading request body"
+    },
+    {
+      "name": "RESPONSE",
+      "description": "Sending response"
+    },
+    {
+      "name": "CLOSE",
+      "terminal": true,
+      "description": "Connection closing"
+    }
+  ],
+  "commands": [
+    {
+      "name": "GET",
+      "pattern": "GET {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "PatternMatch",
+            "comment": "Parse request line"
+          },
+          {
+            "type": "ReadUntil",
+            "delimiter": "\r\n\r\n",
+            "comment": "Read headers"
+          },
+          {
+            "type": "ExtensionCall",
+            "extension": "route HTTP request",
+            "comment": "Dispatch to handler"
+          }
+        ],
+        "next_state": "RESPONSE"
+      }
+    },
+    {
+      "name": "POST",
+      "pattern": "POST {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "PatternMatch",
+            "comment": "Parse request line"
+          },
+          {
+            "type": "ReadUntil",
+            "delimiter": "\r\n\r\n",
+            "comment": "Read headers"
+          },
+          {
+            "type": "StringToInt",
+            "comment": "Parse Content-Length"
+          },
+          {
+            "type": "ReadNBytes",
+            "comment": "Read body"
+          },
+          {
+            "type": "ExtensionCall",
+            "extension": "route HTTP request",
+            "comment": "Dispatch to handler"
+          }
+        ],
+        "next_state": "RESPONSE"
+      }
+    },
+    {
+      "name": "PUT",
+      "pattern": "PUT {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "custom",
+        "next_state": "RESPONSE"
+      }
+    },
+    {
+      "name": "DELETE",
+      "pattern": "DELETE {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "custom",
+        "next_state": "RESPONSE"
+      }
+    },
+    {
+      "name": "HEAD",
+      "pattern": "HEAD {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "custom",
+        "next_state": "RESPONSE"
+      }
+    },
+    {
+      "name": "OPTIONS",
+      "pattern": "OPTIONS {path} HTTP/{version}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "simple_response",
+        "response": "HTTP/1.1 200 OK\r\nAllow: GET, POST, PUT, DELETE, HEAD, OPTIONS\r\nContent-Length: 0\r\n\r\n",
+        "next_state": "INIT"
+      }
+    }
+  ],
+  "errors": {
+    "bad_request": "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\n\r\nBad Request",
+    "not_found": "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found",
+    "method_not_allowed": "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 18\r\n\r\nMethod Not Allowed",
+    "internal_error": "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\n\r\nInternal Server Error"
+  },
+  "tests": [
+    {
+      "name": "simple_get",
+      "description": "Basic GET request",
+      "steps": [
+        {
+          "send": "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+          "expect_contains": "HTTP/1.1 200"
+        }
+      ]
+    },
+    {
+      "name": "not_found",
+      "description": "GET for non-existent resource",
+      "steps": [
+        {
+          "send": "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n",
+          "expect_contains": "HTTP/1.1 404"
+        }
+      ]
+    },
+    {
+      "name": "post_json",
+      "description": "POST with JSON body",
+      "steps": [
+        {
+          "send": "POST /api/data HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"key\":\"val\"}",
+          "expect_contains": "HTTP/1.1"
+        }
+      ]
+    },
+    {
+      "name": "options_cors",
+      "description": "OPTIONS for CORS preflight",
+      "steps": [
+        {
+          "send": "OPTIONS /api HTTP/1.1\r\nHost: localhost\r\n\r\n",
+          "expect_contains": "Allow:"
+        }
+      ]
+    }
+  ]
+}

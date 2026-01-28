@@ -1,0 +1,70 @@
+# Neurlang Project Configuration
+#
+# This file configures the Neurlang project, including stdlib modules
+# and external extensions.
+
+[package]
+name = "neurlang-stdlib"
+version = "0.1.0"
+description = "Neurlang Standard Library"
+
+# Stdlib modules compiled from Rust sources (stdlib/src/*.rs -> lib/*.nl)
+# Set to true to include, false to exclude
+[stdlib]
+math = true         # factorial, fibonacci, gcd, power, is_prime, etc.
+float = true        # FPU operations (sqrt, abs, floor, ceil)
+string = true       # strlen, strcmp, strcpy, atoi, itoa
+array = true        # sum, min, max, search, sort
+bitwise = true      # popcount, clz, ctz, rotl, rotr
+collections = true  # stack, queue, hashtable
+
+# External extensions from crates.io
+# These are compiled as Rust FFI wrappers and registered with RAG
+[extensions.crates]
+# serde_json = { version = "1.0", features = ["std"] }
+# regex = { version = "1.10" }
+# chrono = { version = "0.4" }
+# base64 = { version = "0.21" }
+# uuid = { version = "1.0", features = ["v4"] }
+
+# Go packages (compiled with cgo)
+[extensions.go]
+# golib = { package = "github.com/user/golib", tag = "v1.0.0" }
+
+# C libraries (linked via system or vendored)
+[extensions.c]
+# zlib = { version = "1.3", system = true }
+# openssl = { version = "3.0", system = true }
+
+# Local extensions (auto-detect language from path)
+[extensions.local]
+# myutils = { path = "./extensions/myutils" }
+
+# Build configuration
+[build]
+# Include source comments in generated .nl files
+include_comments = true
+# Generate @test annotations from doc comments
+generate_tests = true
+# Maximum instructions per function (for safety)
+max_instructions = 1000
+# Output directory for generated .nl files
+output_dir = "lib"
+
+# Compiler settings
+[compiler]
+# Optimization level: 0 = none, 1 = basic, 2 = aggressive
+optimization = 1
+# Enable debug wrappers for extensions
+debug_mode = false
+# Target architecture (x86_64, aarch64)
+target = "x86_64"
+
+# Training data generation
+[training]
+# Generate training data from compiled stdlib
+enabled = true
+# Output file for training data
+output = "train/stdlib_training.jsonl"
+# Include synthetic variations
+synthetic_samples = 0

@@ -1,0 +1,247 @@
+; HTTP Server Skeleton Template
+; Protocol: HTTP/1.1
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides the structure for an HTTP server.
+; Supports GET, POST, PUT, DELETE methods with content handling.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD
+;   r12: Request/response length
+;   r13: HTTP method code (1=GET, 2=POST, 3=PUT, 4=DELETE)
+;   r14: Content-Length value
+;   r15: Buffer pointer
+;   r16: Path start pointer
+;   r17: Path length
+;   r18: Query string pointer (or 0)
+;   r19: Headers end position
+;
+; Data section:
+;   recv_buf: Request buffer (8192 bytes)
+;   send_buf: Response buffer (8192 bytes)
+;   body_buf: Request body buffer (65536 bytes)
+
+.data:
+    ; Server configuration
+    port:       .word {{PORT}}
+    backlog:    .word 128
+
+    ; HTTP method constants
+    METHOD_GET:     .word 1
+    METHOD_POST:    .word 2
+    METHOD_PUT:     .word 3
+    METHOD_DELETE:  .word 4
+
+    ; HTTP response templates
+    resp_200:       .string "HTTP/1.1 200 OK\r\n"
+    resp_200_len:   .word 17
+    resp_201:       .string "HTTP/1.1 201 Created\r\n"
+    resp_201_len:   .word 22
+    resp_204:       .string "HTTP/1.1 204 No Content\r\n"
+    resp_204_len:   .word 25
+    resp_400:       .string "HTTP/1.1 400 Bad Request\r\n"
+    resp_400_len:   .word 26
+    resp_404:       .string "HTTP/1.1 404 Not Found\r\n"
+    resp_404_len:   .word 24
+    resp_405:       .string "HTTP/1.1 405 Method Not Allowed\r\n"
+    resp_405_len:   .word 33
+    resp_500:       .string "HTTP/1.1 500 Internal Server Error\r\n"
+    resp_500_len:   .word 36
+
+    ; Common headers
+    header_content_type_json:   .string "Content-Type: application/json\r\n"
+    header_ct_json_len:         .word 32
+    header_content_type_text:   .string "Content-Type: text/plain\r\n"
+    header_ct_text_len:         .word 26
+    header_content_length:      .string "Content-Length: "
+    header_cl_prefix_len:       .word 16
+    header_connection_close:    .string "Connection: close\r\n"
+    header_conn_close_len:      .word 19
+    crlf:                       .string "\r\n"
+    crlf_len:                   .word 2
+
+    ; Buffers
+    recv_buf:   .space 8192
+    send_buf:   .space 8192
+    body_buf:   .space 65536
+
+    ; Path buffer for comparison
+    path_buf:   .space 256
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0               ; protocol
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options (SO_REUSEADDR)
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind to port
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Listen
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+; ============================================================================
+; Accept Loop
+; ============================================================================
+.accept_loop:
+    mov r0, r10
+    io.accept r11, r0       ; client socket -> r11
+    b .handle_request
+
+; ============================================================================
+; HTTP Request Handling
+; ============================================================================
+.handle_request:
+    ; Read HTTP request
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 8192
+    io.recv r12, r0, r1, r2
+
+    ; Check for empty request
+    beqz r12, .close_connection
+
+    ; Parse request line (method, path, version)
+{{SLOT_PARSE_REQUEST_LINE}}
+
+    ; Parse headers and find Content-Length
+{{SLOT_PARSE_HEADERS}}
+
+    ; Read body if Content-Length > 0
+    beqz r14, .route_request
+{{SLOT_READ_BODY}}
+
+; ============================================================================
+; Request Routing
+; ============================================================================
+.route_request:
+    ; Route based on method and path
+{{SLOT_ROUTE_REQUEST}}
+
+    ; Default: 404 Not Found
+    b .send_404
+
+; ============================================================================
+; Route Handlers
+; ============================================================================
+{{ROUTE_HANDLERS}}
+
+; ============================================================================
+; Response Helpers
+; ============================================================================
+.send_200:
+    ; Send 200 OK response
+    lea r0, resp_200
+    load r1, [resp_200_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    ret
+
+.send_201:
+    ; Send 201 Created response
+    lea r0, resp_201
+    load r1, [resp_201_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    ret
+
+.send_204:
+    ; Send 204 No Content response
+    lea r0, resp_204
+    load r1, [resp_204_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    ret
+
+.send_400:
+    ; Send 400 Bad Request
+    lea r0, resp_400
+    load r1, [resp_400_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .close_connection
+
+.send_404:
+    ; Send 404 Not Found
+    lea r0, resp_404
+    load r1, [resp_404_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .close_connection
+
+.send_405:
+    ; Send 405 Method Not Allowed
+    lea r0, resp_405
+    load r1, [resp_405_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .close_connection
+
+.send_500:
+    ; Send 500 Internal Server Error
+    lea r0, resp_500
+    load r1, [resp_500_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .close_connection
+
+; Send JSON response body
+; Input: r3 = body pointer, r4 = body length
+.send_json_body:
+    ; Send Content-Type header
+    lea r0, header_content_type_json
+    load r1, [header_ct_json_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+{{SLOT_SEND_CONTENT_LENGTH}}
+
+    ; Send header terminator
+    lea r0, crlf
+    load r1, [crlf_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+    ; Send body
+    mov r0, r3              ; body pointer
+    mov r1, r4              ; body length
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    ret
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.close_connection:
+    mov r0, r11
+    io.close r0, r0
+    b .accept_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

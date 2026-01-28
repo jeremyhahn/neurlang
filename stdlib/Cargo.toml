@@ -1,0 +1,21 @@
+[package]
+name = "neurlang-stdlib"
+version = "0.1.0"
+edition = "2021"
+description = "Standard library functions for Neurlang (compiled to IR)"
+license = "MIT"
+authors = ["Neurlang Team"]
+
+[lib]
+name = "neurlang_stdlib"
+path = "src/lib.rs"
+
+# Note: This crate is primarily used as a source for the Rust→IR compiler.
+# The functions here are compiled to Neurlang assembly, not linked directly.
+# Dependencies should be minimal since we're targeting a simple Rust subset.
+
+[dependencies]
+# No dependencies by default - stdlib functions should be self-contained
+
+[dev-dependencies]
+# Testing dependencies

@@ -1,0 +1,270 @@
+[package]
+name = "neurlang"
+version = "0.1.0"
+edition = "2021"
+description = "AI-Optimized Binary Programming Language with 32-opcode IR and copy-and-patch compilation"
+license = "MIT"
+authors = ["Neurlang Team"]
+repository = "https://github.com/neurlang/neurlang"
+keywords = ["ai", "llm", "compiler", "jit", "programming-language"]
+categories = ["development-tools", "compilers"]
+
+[lib]
+name = "neurlang"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nl"
+path = "src/main.rs"
+
+[[bin]]
+name = "nl-asm"
+path = "src/bin/assembler.rs"
+
+[[bin]]
+name = "nl-datagen"
+path = "datagen/src/main.rs"
+
+[[bin]]
+name = "nl-rest-api"
+path = "src/bin/rest_api.rs"
+
+[dependencies]
+# Concurrency primitives
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization for training data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Random number generation
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Cryptography - using proven, audited libraries
+ring = "0.17"                    # SHA256, HMAC, AES-GCM, PBKDF2, secure random
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }  # Ed25519 signatures
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }  # X25519 key exchange
+subtle = "2.5"                   # Constant-time operations
+chacha20poly1305 = "0.10"        # ChaCha20-Poly1305 and XChaCha20-Poly1305
+
+# Extended crypto support for TLS and production use
+sha1 = "0.10"                    # SHA-1 (for WebSocket handshake, legacy protocols)
+sha2 = "0.10"                    # SHA-384, SHA-512
+sha3 = "0.10"                    # SHA3-256, SHA3-512, Keccak
+blake2 = "0.10"                  # BLAKE2b, BLAKE2s
+rsa = { version = "0.9", features = ["sha2"] }  # RSA 2048-4096 sign/verify/encrypt/decrypt
+p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }  # NIST P-256 ECDSA/ECDH
+p384 = { version = "0.13", features = ["ecdsa", "ecdh"] }  # NIST P-384 ECDSA/ECDH
+p521 = { version = "0.13", features = ["ecdsa", "ecdh"] }  # NIST P-521 ECDSA/ECDH
+hkdf = "0.12"                    # HKDF for TLS 1.3 key derivation
+argon2 = "0.5"                   # Argon2id password hashing
+x509-parser = "0.16"             # X.509 certificate parsing
+webpki = "0.22"                  # Certificate chain validation
+
+# Memory mapping for executable buffers
+memmap2 = "0.9"
+
+# Compression for wrappers
+flate2 = "1.0"                   # zlib, gzip compression
+lz4 = "1.28"                     # LZ4 fast compression
+zstd = "0.13"                    # Zstandard compression
+
+# Date/time for wrappers
+chrono = "0.4"
+
+# Certificate generation for wrappers
+rcgen = "0.13"                   # X.509 certificate generation
+time = "0.3"                     # Time library for rcgen
+
+# TLS for wrappers (pure Rust, no OpenSSL)
+rustls = { version = "0.23", features = ["ring"] }  # TLS 1.2 + 1.3 with ring backend
+webpki-roots = "0.26"            # Mozilla CA root certificates
+rustls-pemfile = "2.1"           # PEM file parsing
+
+# Platform-specific
+libc = "0.2"
+socket2 = { version = "0.5", features = ["all"] }  # Cross-platform socket options (SO_REUSEPORT)
+
+# FFI / Dynamic library loading
+libloading = "0.8"               # Safe cross-platform dynamic library loading
+
+# Error handling
+thiserror = "1"
+
+# Rust source parsing for Rust→IR compiler
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# TOML config file parsing for neurlang.toml
+toml = "0.8"
+
+# Lazy initialization
+lazy_static = "1.4"
+anyhow = "1"
+
+# Hex encoding for binary data
+hex = "0.4"
+
+# Base64 encoding for wrappers
+base64 = "0.22"
+
+# HTTP client (simple, blocking)
+ureq = { version = "2.9", features = ["json"] }
+
+# Lazy initialization
+once_cell = "1"
+
+# Lightweight regex for tokenizer
+regex-lite = "0.1"
+
+# Full regex for wrappers module
+regex = "1.10"
+
+# Stdlib for verification - allows calling Rust functions directly
+neurlang-stdlib = { path = "stdlib" }
+
+# Binary detection for docker/podman
+which = "6.0"
+
+# =============================================================================
+# INFERENCE ENGINES (choose one or more)
+# =============================================================================
+
+# ONNX Runtime - fastest inference, GPU support via CUDA/TensorRT/CoreML
+# To enable: cargo build --features ort
+ort = { version = "2.0.0-rc.11", optional = true }
+ndarray = { version = "0.16", optional = true }
+
+# Tract - pure Rust ONNX inference, smallest binary, CPU-only
+# To enable: cargo build --features tract
+tract-onnx = { version = "0.21", optional = true }
+
+# Candle - Hugging Face's Rust ML framework, balanced performance
+# To enable: cargo build --features candle
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+
+# =============================================================================
+# NATIVE TRAINING (burn framework)
+# =============================================================================
+
+# Burn - native Rust ML framework for training + inference
+# To enable: cargo build --features train
+burn = { version = "0.20", optional = true, features = ["train", "wgpu", "ndarray"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["mman", "signal"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1
+
+[[bench]]
+name = "compile_bench"
+harness = false
+
+[[test]]
+name = "opcode_tests"
+path = "test/opcode_tests.rs"
+
+[[test]]
+name = "interpreter_exec"
+path = "test/interpreter_exec.rs"
+
+[[test]]
+name = "cli_integration"
+path = "test/cli_integration.rs"
+
+[[test]]
+name = "integration_runner"
+path = "test/integration_runner.rs"
+
+[[test]]
+name = "examples_integration"
+path = "test/examples_integration.rs"
+
+[[test]]
+name = "crypto_integration"
+path = "test/crypto_integration.rs"
+
+[features]
+default = []
+
+# =============================================================================
+# INFERENCE ENGINES
+# =============================================================================
+
+# ONNX Runtime - fastest, GPU support (CUDA/TensorRT/CoreML)
+# Usage: cargo build --features ort
+ort-backend = ["dep:ort", "dep:ndarray"]
+
+# Tract - pure Rust, smallest binary, CPU-only
+# Usage: cargo build --features tract
+tract = ["dep:tract-onnx"]
+
+# Candle - Hugging Face Rust ML, balanced performance
+# Usage: cargo build --features candle
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
+
+# Legacy alias for ort (backwards compatibility)
+onnx = ["ort-backend"]
+
+# =============================================================================
+# NATIVE TRAINING (burn framework)
+# =============================================================================
+
+# Enable native Rust training with burn framework
+# Usage: cargo build --features train
+train = ["dep:burn"]
+
+# =============================================================================
+# BUILD PRESETS
+# =============================================================================
+
+# Minimal: tract only - smallest binary (~7 MB added), CPU inference
+# Usage: cargo build --features minimal
+minimal = ["tract"]
+
+# Standard: ort only - best performance (~15 MB added), GPU support
+# Usage: cargo build --features standard
+standard = ["ort-backend"]
+
+# Full: all engines + native training (~80 MB added)
+# Usage: cargo build --features full
+full = ["ort-backend", "tract", "candle", "train"]
+
+# =============================================================================
+# OTHER FEATURES
+# =============================================================================
+
+# Enable interpreter-only mode (no JIT)
+interp-only = []
+
+# Enable detailed tracing
+trace = []
+
+# Enable LLM backends for two-tier orchestration (Claude, Ollama, OpenAI)
+# When disabled, backends return mock responses for testing
+# Usage: cargo build --features llm-backends
+llm-backends = []

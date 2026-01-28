@@ -1,0 +1,21 @@
+# Neurlang Performance Benchmark Container
+# Uses ApacheBench (ab) to compare Neurlang vs nginx performance
+
+FROM alpine:latest
+
+# Install benchmark tools
+RUN apk add --no-cache \
+    apache2-utils \
+    bash \
+    curl \
+    bc \
+    jq
+
+# Copy benchmark script
+COPY benchmark.sh /benchmark.sh
+RUN chmod +x /benchmark.sh
+
+WORKDIR /app
+RUN mkdir -p /app/results
+
+ENTRYPOINT ["/benchmark.sh"]

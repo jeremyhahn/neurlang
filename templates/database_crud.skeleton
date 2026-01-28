@@ -1,0 +1,362 @@
+; ============================================================================
+; DATABASE CRUD TEMPLATE
+; ============================================================================
+; Template for database operations with connection pooling
+;
+; Supports: SQLite, PostgreSQL, MySQL (via extensions)
+;
+; Slot Types Used:
+;   - ExtensionCall: Database operations (query, exec, prepare)
+;   - ResponseBuilder: Build SQL queries
+;   - PatternMatch: Parse query results
+;   - BufferRead/Write: Handle binary data
+;   - ValidationHook: Input sanitization
+;   - LoopUntil: Iterate result rows
+;
+; Register Conventions:
+;   r0-r3:  Function arguments, return values
+;   r10:    Database connection handle
+;   r11:    Prepared statement handle
+;   r12:    Result set handle / row count
+;   r13:    Current row pointer
+;   r14:    Column count
+;   r15:    Temp/scratch
+;
+; Extension IDs:
+;   SQLite: 270-279 (SQLITE_OPEN=270, SQLITE_EXEC=271, etc.)
+;   PostgreSQL: 280-289
+;   MySQL: 290-299
+;
+; ============================================================================
+
+.data:
+    ; Connection config
+    db_type:         .asciiz "{{DB_TYPE}}"       ; "sqlite", "postgres", "mysql"
+    db_path:         .asciiz "{{DB_PATH}}"       ; Connection string / file path
+
+    ; Table and column definitions
+    table_name:      .asciiz "{{TABLE_NAME}}"
+    primary_key:     .asciiz "{{PRIMARY_KEY}}"
+    columns:         .asciiz "{{COLUMNS}}"       ; Comma-separated column list
+
+    ; SQL templates
+    sql_select_all:  .asciiz "SELECT {{COLUMNS}} FROM {{TABLE_NAME}}"
+    sql_select_one:  .asciiz "SELECT {{COLUMNS}} FROM {{TABLE_NAME}} WHERE {{PRIMARY_KEY}} = ?"
+    sql_insert:      .asciiz "INSERT INTO {{TABLE_NAME}} ({{INSERT_COLUMNS}}) VALUES ({{INSERT_PLACEHOLDERS}})"
+    sql_update:      .asciiz "UPDATE {{TABLE_NAME}} SET {{UPDATE_SET}} WHERE {{PRIMARY_KEY}} = ?"
+    sql_delete:      .asciiz "DELETE FROM {{TABLE_NAME}} WHERE {{PRIMARY_KEY}} = ?"
+    sql_count:       .asciiz "SELECT COUNT(*) FROM {{TABLE_NAME}}"
+
+    ; Query buffer for dynamic queries
+    query_buffer:    .space 4096
+
+    ; Result buffers
+    result_buffer:   .space 65536     ; Row data
+    row_buffer:      .space 4096      ; Single row
+
+    ; Error messages
+    err_connect:     .asciiz "Error: Failed to connect to database\n"
+    err_query:       .asciiz "Error: Query execution failed\n"
+    err_not_found:   .asciiz "Error: Record not found\n"
+    err_constraint:  .asciiz "Error: Constraint violation\n"
+
+    ; Success messages
+    msg_created:     .asciiz "Record created successfully\n"
+    msg_updated:     .asciiz "Record updated successfully\n"
+    msg_deleted:     .asciiz "Record deleted successfully\n"
+
+.text:
+
+; ============================================================================
+; ENTRY POINT
+; ============================================================================
+.entry:
+    ; Open database connection
+    call .db_connect
+    beq r10, zero, .connect_failed
+
+    ; {{SLOT_OPERATION_DISPATCH}}
+    ; Slot: Route to CRUD operation based on input
+    ; PatternSwitch on operation type
+
+    b .operation_read       ; Default to read
+
+.connect_failed:
+    mov r0, err_connect
+    sys.call PRINT_ERR, r0
+    mov r0, 1
+    halt
+
+; ============================================================================
+; DATABASE CONNECTION
+; ============================================================================
+.db_connect:
+    mov r0, db_path
+
+    ; {{SLOT_DB_CONNECT}}
+    ; Slot: ExtensionCall based on db_type
+    ; SQLite: ext.call SQLITE_OPEN, r0
+    ; Postgres: ext.call PG_CONNECT, r0
+
+    ext.call @"database open", r0
+    mov r10, r0
+    ret
+
+.db_disconnect:
+    beq r10, zero, .db_disconnect_done
+    mov r0, r10
+    ext.call @"database close", r0
+.db_disconnect_done:
+    ret
+
+; ============================================================================
+; CREATE - Insert new record
+; ============================================================================
+.operation_create:
+    ; {{SLOT_VALIDATE_INPUT}}
+    ; Slot: ValidationHook for each input field
+    ; Prevents SQL injection, validates data types
+
+    ; {{SLOT_BUILD_INSERT}}
+    ; Slot: ResponseBuilder to create INSERT statement
+    ; Binds parameters safely
+
+    ; Prepare statement
+    mov r0, r10             ; connection
+    mov r1, sql_insert
+    ext.call @"database prepare", r0, r1
+    mov r11, r0             ; statement handle
+    beq r11, zero, .query_error
+
+    ; {{SLOT_BIND_PARAMS}}
+    ; Slot: Bind insert values to statement
+    ; For each column, bind r<N> to parameter position
+
+    ; Execute
+    mov r0, r10
+    mov r1, r11
+    ext.call @"database step", r0, r1
+    mov r12, r0             ; affected rows
+
+    ; Finalize statement
+    mov r0, r11
+    ext.call @"database finalize", r0
+
+    ; Check result
+    beq r12, zero, .query_error
+
+    ; Get last insert ID
+    mov r0, r10
+    ext.call @"database last insert id", r0
+    ; r0 = new record ID
+
+    ; {{SLOT_CREATE_RESPONSE}}
+    ; Slot: Build success response with new ID
+
+    mov r0, msg_created
+    sys.call PRINT, r0
+    b .cleanup
+
+; ============================================================================
+; READ - Fetch records
+; ============================================================================
+.operation_read:
+    ; Check if we have an ID parameter
+    ; {{SLOT_CHECK_READ_PARAMS}}
+    ; If ID provided, jump to .read_one
+    ; Otherwise, read all
+
+    b .read_all
+
+.read_all:
+    ; Prepare SELECT ALL statement
+    mov r0, r10
+    mov r1, sql_select_all
+    ext.call @"database prepare", r0, r1
+    mov r11, r0
+    beq r11, zero, .query_error
+
+    b .read_rows
+
+.read_one:
+    ; Prepare SELECT ONE statement
+    mov r0, r10
+    mov r1, sql_select_one
+    ext.call @"database prepare", r0, r1
+    mov r11, r0
+    beq r11, zero, .query_error
+
+    ; Bind ID parameter
+    ; {{SLOT_BIND_ID}}
+    ; Slot: Bind primary key value
+
+    b .read_rows
+
+.read_rows:
+    ; Get column count
+    mov r0, r11
+    ext.call @"database column count", r0
+    mov r14, r0
+
+    ; Initialize row count
+    mov r12, 0
+
+.read_row_loop:
+    ; Step to next row
+    mov r0, r10
+    mov r1, r11
+    ext.call @"database step", r0, r1
+
+    ; Check if done (step returns 0 when no more rows)
+    beq r0, zero, .read_done
+
+    ; {{SLOT_READ_COLUMNS}}
+    ; Slot: LoopUntil to read each column
+    ; Extracts column values into buffer
+
+    ; Process row
+    ; {{SLOT_FORMAT_ROW}}
+    ; Slot: ResponseBuilder to format row as JSON/text
+
+    addi r12, r12, 1
+    b .read_row_loop
+
+.read_done:
+    ; Finalize statement
+    mov r0, r11
+    ext.call @"database finalize", r0
+
+    ; Check if any rows found
+    beq r12, zero, .not_found
+
+    ; {{SLOT_READ_RESPONSE}}
+    ; Slot: Format final response with all rows
+
+    b .cleanup
+
+.not_found:
+    mov r0, err_not_found
+    sys.call PRINT_ERR, r0
+    b .cleanup
+
+; ============================================================================
+; UPDATE - Modify existing record
+; ============================================================================
+.operation_update:
+    ; {{SLOT_VALIDATE_UPDATE_INPUT}}
+    ; Slot: Validate update fields
+
+    ; Prepare UPDATE statement
+    mov r0, r10
+    mov r1, sql_update
+    ext.call @"database prepare", r0, r1
+    mov r11, r0
+    beq r11, zero, .query_error
+
+    ; {{SLOT_BIND_UPDATE_PARAMS}}
+    ; Slot: Bind update values and ID
+
+    ; Execute
+    mov r0, r10
+    mov r1, r11
+    ext.call @"database step", r0, r1
+    mov r12, r0             ; affected rows
+
+    ; Finalize
+    mov r0, r11
+    ext.call @"database finalize", r0
+
+    ; Check result
+    beq r12, zero, .not_found
+
+    mov r0, msg_updated
+    sys.call PRINT, r0
+    b .cleanup
+
+; ============================================================================
+; DELETE - Remove record
+; ============================================================================
+.operation_delete:
+    ; Prepare DELETE statement
+    mov r0, r10
+    mov r1, sql_delete
+    ext.call @"database prepare", r0, r1
+    mov r11, r0
+    beq r11, zero, .query_error
+
+    ; {{SLOT_BIND_DELETE_ID}}
+    ; Slot: Bind primary key for deletion
+
+    ; Execute
+    mov r0, r10
+    mov r1, r11
+    ext.call @"database step", r0, r1
+    mov r12, r0
+
+    ; Finalize
+    mov r0, r11
+    ext.call @"database finalize", r0
+
+    beq r12, zero, .not_found
+
+    mov r0, msg_deleted
+    sys.call PRINT, r0
+    b .cleanup
+
+; ============================================================================
+; ERROR HANDLING
+; ============================================================================
+.query_error:
+    mov r0, err_query
+    sys.call PRINT_ERR, r0
+
+    ; Get last error message
+    mov r0, r10
+    ext.call @"database error message", r0
+    beq r0, zero, .cleanup
+    sys.call PRINT_ERR, r0
+
+    b .cleanup
+
+; ============================================================================
+; CLEANUP
+; ============================================================================
+.cleanup:
+    call .db_disconnect
+    mov r0, 0
+    halt
+
+; ============================================================================
+; UTILITY: Execute raw SQL (for migrations, etc.)
+; ============================================================================
+.exec_raw:
+    ; Input: r0 = SQL string
+    ; Output: r0 = success (1) or failure (0)
+    mov r1, r0
+    mov r0, r10
+    ext.call @"database exec", r0, r1
+    ret
+
+; ============================================================================
+; UTILITY: Begin/Commit/Rollback transaction
+; ============================================================================
+.begin_transaction:
+    mov r0, r10
+    ext.call @"database begin", r0
+    ret
+
+.commit_transaction:
+    mov r0, r10
+    ext.call @"database commit", r0
+    ret
+
+.rollback_transaction:
+    mov r0, r10
+    ext.call @"database rollback", r0
+    ret
+
+; ============================================================================
+; DATA SECTION FOR SLOTS
+; ============================================================================
+
+{{DATA_ITEMS}}

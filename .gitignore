@@ -1,0 +1,74 @@
+# Rust build artifacts
+/target/
+/stdlib/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.eggs/
+
+# Training data and models (regeneratable)
+# Model files (large binaries)
+*.pt
+*.onnx
+*.onnx.data
+*.mpk
+*.safetensors
+
+# Training data (generated)
+*.jsonl
+
+# Model directories (keep .gitkeep files)
+/train/models/model.config.json
+/train/checkpoints/
+/train/multihead/checkpoints/
+/train/multihead/data/
+/train/multihead/models/
+/train/models/*.pt
+/train/venv/
+/models/*.onnx
+/models/*.pt
+/models/*.mpk
+/model.mpk
+
+# Logs and temp files
+*.log
+*.tmp
+state.db
+state.db.tmp
+
+# Archives and large files
+*.tar.gz
+*.zip
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Coverage
+*.lcov
+coverage/
+htmlcov/
+
+# Compiled Neurlang binaries
+*.nlb

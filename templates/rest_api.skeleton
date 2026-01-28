@@ -1,0 +1,302 @@
+; REST API Server Skeleton Template
+; Protocol: HTTP/1.1 REST
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides structure for a RESTful API server.
+; Supports JSON request/response with CRUD operations.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD
+;   r12: Request/response length
+;   r13: HTTP method code (1=GET, 2=POST, 3=PUT, 4=DELETE)
+;   r14: Content-Length value
+;   r15: Buffer pointer
+;   r16: Path start pointer
+;   r17: Path length
+;   r18: Resource ID (parsed from path)
+;   r19: JSON field pointer
+;   r20: Database/storage handle
+;
+; Data section:
+;   Request/response buffers, JSON templates, error messages
+
+.data:
+    ; Server configuration
+    port:       .word {{PORT}}
+    backlog:    .word 128
+    hostname:   .string "{{HOSTNAME}}"
+
+    ; HTTP method constants
+    METHOD_GET:     .word 1
+    METHOD_POST:    .word 2
+    METHOD_PUT:     .word 3
+    METHOD_DELETE:  .word 4
+    METHOD_PATCH:   .word 5
+    METHOD_OPTIONS: .word 6
+
+    ; HTTP response status lines
+    resp_200:       .string "HTTP/1.1 200 OK\r\n"
+    resp_200_len:   .word 17
+    resp_201:       .string "HTTP/1.1 201 Created\r\n"
+    resp_201_len:   .word 22
+    resp_204:       .string "HTTP/1.1 204 No Content\r\n"
+    resp_204_len:   .word 25
+    resp_400:       .string "HTTP/1.1 400 Bad Request\r\n"
+    resp_400_len:   .word 26
+    resp_401:       .string "HTTP/1.1 401 Unauthorized\r\n"
+    resp_401_len:   .word 27
+    resp_403:       .string "HTTP/1.1 403 Forbidden\r\n"
+    resp_403_len:   .word 24
+    resp_404:       .string "HTTP/1.1 404 Not Found\r\n"
+    resp_404_len:   .word 24
+    resp_405:       .string "HTTP/1.1 405 Method Not Allowed\r\n"
+    resp_405_len:   .word 33
+    resp_409:       .string "HTTP/1.1 409 Conflict\r\n"
+    resp_409_len:   .word 23
+    resp_422:       .string "HTTP/1.1 422 Unprocessable Entity\r\n"
+    resp_422_len:   .word 35
+    resp_500:       .string "HTTP/1.1 500 Internal Server Error\r\n"
+    resp_500_len:   .word 36
+
+    ; Common headers
+    header_content_type_json:   .string "Content-Type: application/json\r\n"
+    header_ct_json_len:         .word 32
+    header_content_length:      .string "Content-Length: "
+    header_cl_prefix_len:       .word 16
+    header_connection_close:    .string "Connection: close\r\n"
+    header_conn_close_len:      .word 19
+    header_cors_origin:         .string "Access-Control-Allow-Origin: *\r\n"
+    header_cors_origin_len:     .word 32
+    header_cors_methods:        .string "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+    header_cors_methods_len:    .word 63
+    header_cors_headers:        .string "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+    header_cors_headers_len:    .word 59
+    crlf:                       .string "\r\n"
+    crlf_len:                   .word 2
+
+    ; JSON error templates
+    err_json_invalid:       .string "{\"error\":\"invalid_json\",\"message\":\"Request body is not valid JSON\"}"
+    err_json_invalid_len:   .word 68
+    err_json_missing:       .string "{\"error\":\"missing_field\",\"message\":\"Required field is missing\"}"
+    err_json_missing_len:   .word 63
+    err_not_found:          .string "{\"error\":\"not_found\",\"message\":\"Resource not found\"}"
+    err_not_found_len:      .word 52
+    err_unauthorized:       .string "{\"error\":\"unauthorized\",\"message\":\"Authentication required\"}"
+    err_unauthorized_len:   .word 60
+    err_server:             .string "{\"error\":\"server_error\",\"message\":\"Internal server error\"}"
+    err_server_len:         .word 58
+
+    ; Buffers
+    recv_buf:       .space 8192
+    send_buf:       .space 8192
+    body_buf:       .space 65536
+    json_buf:       .space 8192
+    path_buf:       .space 256
+    id_buf:         .space 64
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options
+    mov r0, r10
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind
+    mov r0, r10
+    load r1, [port]
+    io.bind r0, r0, r1
+
+    ; Listen
+    mov r0, r10
+    load r1, [backlog]
+    io.listen r0, r0, r1
+
+    ; Initialize storage (if needed)
+{{SLOT_INIT_STORAGE}}
+
+; ============================================================================
+; Accept Loop
+; ============================================================================
+.accept_loop:
+    mov r0, r10
+    io.accept r11, r0
+    b .handle_request
+
+; ============================================================================
+; Request Handling
+; ============================================================================
+.handle_request:
+    ; Read request
+    mov r0, r11
+    lea r1, recv_buf
+    mov r2, 8192
+    io.recv r12, r0, r1, r2
+
+    beqz r12, .close_connection
+
+    ; Parse request line
+{{SLOT_PARSE_REQUEST_LINE}}
+
+    ; Handle OPTIONS (CORS preflight)
+    load r0, [METHOD_OPTIONS]
+    beq r13, r0, .handle_options
+
+    ; Parse headers
+{{SLOT_PARSE_HEADERS}}
+
+    ; Read body if needed
+    beqz r14, .route_request
+{{SLOT_READ_BODY}}
+
+    ; Validate JSON if body present
+{{SLOT_VALIDATE_JSON}}
+
+; ============================================================================
+; API Routing
+; ============================================================================
+.route_request:
+    ; Extract resource and ID from path
+{{SLOT_EXTRACT_RESOURCE}}
+
+    ; Route to appropriate handler
+{{SLOT_ROUTE_API}}
+
+    ; Default: 404
+    b .api_not_found
+
+; ============================================================================
+; API Resource Handlers
+; ============================================================================
+{{API_HANDLERS}}
+
+; ============================================================================
+; CORS Handling
+; ============================================================================
+.handle_options:
+    ; Send 204 with CORS headers
+    lea r0, resp_204
+    load r1, [resp_204_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+    ; CORS headers
+    lea r0, header_cors_origin
+    load r1, [header_cors_origin_len]
+    io.send r2, r2, r0, r1
+
+    lea r0, header_cors_methods
+    load r1, [header_cors_methods_len]
+    io.send r2, r2, r0, r1
+
+    lea r0, header_cors_headers
+    load r1, [header_cors_headers_len]
+    io.send r2, r2, r0, r1
+
+    lea r0, crlf
+    load r1, [crlf_len]
+    io.send r2, r2, r0, r1
+
+    b .close_connection
+
+; ============================================================================
+; Response Helpers
+; ============================================================================
+.send_json_response:
+    ; Input: r3 = status code, r4 = body ptr, r5 = body len
+    ; Send status line based on r3
+{{SLOT_SEND_STATUS}}
+
+    ; Send CORS header
+    lea r0, header_cors_origin
+    load r1, [header_cors_origin_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+
+    ; Send Content-Type
+    lea r0, header_content_type_json
+    load r1, [header_ct_json_len]
+    io.send r2, r2, r0, r1
+
+    ; Send Content-Length
+{{SLOT_SEND_CONTENT_LENGTH}}
+
+    ; Header terminator
+    lea r0, crlf
+    load r1, [crlf_len]
+    io.send r2, r2, r0, r1
+
+    ; Send body
+    mov r0, r4
+    mov r1, r5
+    io.send r2, r2, r0, r1
+    ret
+
+; ============================================================================
+; Error Responses
+; ============================================================================
+.api_bad_request:
+    mov r3, 400
+    lea r4, err_json_invalid
+    load r5, [err_json_invalid_len]
+    call .send_json_response
+    b .close_connection
+
+.api_unauthorized:
+    mov r3, 401
+    lea r4, err_unauthorized
+    load r5, [err_unauthorized_len]
+    call .send_json_response
+    b .close_connection
+
+.api_not_found:
+    mov r3, 404
+    lea r4, err_not_found
+    load r5, [err_not_found_len]
+    call .send_json_response
+    b .close_connection
+
+.api_server_error:
+    mov r3, 500
+    lea r4, err_server
+    load r5, [err_server_len]
+    call .send_json_response
+    b .close_connection
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.close_connection:
+    mov r0, r11
+    io.close r0, r0
+    b .accept_loop
+
+; ============================================================================
+; JSON Utilities
+; ============================================================================
+{{SLOT_JSON_PARSE}}
+
+{{SLOT_JSON_BUILD}}
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    mov r0, r10
+    io.close r0, r0
+    halt

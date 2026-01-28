@@ -1,0 +1,43 @@
+# Neurlang Training Container (CPU-only)
+# Parallel Instruction Model Training without GPU
+#
+# Usage:
+#   docker build -t neurlang-train-cpu -f docker/Dockerfile.train-cpu .
+#   docker run --rm \
+#     -v $(pwd)/data:/data \
+#     -v $(pwd)/models:/models \
+#     neurlang-train-cpu \
+#       --data /data/training_data_500k.jsonl \
+#       --output /models/model.pt \
+#       --device cpu
+
+FROM python:3.11-slim
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install PyTorch (CPU version) and training dependencies
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir \
+        torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip3 install --no-cache-dir \
+        numpy \
+        tqdm
+
+# Create app directory
+WORKDIR /app
+
+# Copy parallel model training code
+COPY train/parallel /app/train/parallel
+
+# Create output directories
+RUN mkdir -p /data /models
+
+# Set Python path for imports
+ENV PYTHONPATH=/app/train
+
+# Default entrypoint - run training script
+ENTRYPOINT ["python3", "/app/train/parallel/train.py"]
+
+# Default command - show help
+CMD ["--help"]

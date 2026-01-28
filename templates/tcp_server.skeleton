@@ -1,0 +1,157 @@
+; TCP Server Skeleton Template
+; Protocol: {{PROTOCOL_NAME}}
+; Description: {{DESCRIPTION}}
+;
+; This skeleton provides the structure for a TCP-based protocol server.
+; Slots are marked with {{SLOT_N}} and will be filled by the model.
+;
+; Register conventions:
+;   r10: Server socket FD
+;   r11: Client socket FD
+;   r12: Request/response length
+;   r13: Connection state
+;   r14: Database handle (if applicable)
+;   r15: Buffer pointer
+;
+; Data section references:
+;   recv_buf: Input buffer (4096 bytes)
+;   send_buf: Output buffer (4096 bytes)
+;   greeting: Server greeting message
+;   err_syntax: Syntax error response
+;   err_sequence: Bad sequence error response
+
+.data:
+    ; Server configuration
+    port:       .word {{PORT}}
+    backlog:    .word 128
+
+    ; Greeting message
+    greeting:   .string "{{GREETING}}"
+    greeting_len: .word {{GREETING_LEN}}
+
+    ; Buffers
+    recv_buf:   .space 4096
+    send_buf:   .space 4096
+
+    ; Error responses
+    err_syntax:     .string "{{ERROR_SYNTAX}}"
+    err_syntax_len: .word {{ERROR_SYNTAX_LEN}}
+    err_sequence:   .string "{{ERROR_SEQUENCE}}"
+    err_sequence_len: .word {{ERROR_SEQUENCE_LEN}}
+
+{{DATA_ITEMS}}
+
+.text:
+; ============================================================================
+; Server Initialization
+; ============================================================================
+.entry:
+    ; Create server socket
+    mov r0, 2               ; AF_INET
+    mov r1, 1               ; SOCK_STREAM
+    mov r2, 0               ; protocol
+    io.socket r10, r0, r1, r2
+
+    ; Set socket options (SO_REUSEADDR)
+    mov r0, r10             ; socket fd
+    mov r1, 1               ; SOL_SOCKET
+    mov r2, 2               ; SO_REUSEADDR
+    mov r3, 1               ; enable
+    io.setsockopt r0, r0, r1, r2, r3
+
+    ; Bind to port
+    mov r0, r10             ; socket fd
+    load r1, [port]         ; port number
+    io.bind r0, r0, r1
+
+    ; Listen for connections
+    mov r0, r10             ; socket fd
+    load r1, [backlog]      ; backlog
+    io.listen r0, r0, r1
+
+; ============================================================================
+; Accept Loop - Wait for client connections
+; ============================================================================
+.accept_loop:
+    ; Accept new connection
+    mov r0, r10             ; server socket
+    io.accept r11, r0       ; client socket -> r11
+
+    ; Initialize connection state
+    mov r13, 0              ; STATE_INIT
+
+    ; Send greeting
+    lea r0, greeting
+    load r1, [greeting_len]
+    mov r2, r11             ; client socket
+    io.send r2, r2, r0, r1
+
+    ; Jump to command loop
+    b .command_loop
+
+; ============================================================================
+; Command Processing Loop
+; ============================================================================
+.command_loop:
+    ; Read until line ending
+    mov r0, r11             ; client socket
+    lea r1, recv_buf        ; buffer
+    mov r2, 4096            ; max length
+    mov r15, r1             ; save buffer ptr
+
+{{SLOT_READ_COMMAND}}
+
+    ; Check for connection close
+    beqz r12, .client_disconnect
+
+    ; Parse and dispatch command
+{{SLOT_COMMAND_DISPATCH}}
+
+    ; Continue processing
+    b .command_loop
+
+; ============================================================================
+; Command Handlers
+; ============================================================================
+{{COMMAND_HANDLERS}}
+
+; ============================================================================
+; Error Handlers
+; ============================================================================
+.syntax_error:
+    ; Send syntax error response
+    lea r0, err_syntax
+    load r1, [err_syntax_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .command_loop
+
+.sequence_error:
+    ; Send sequence error response
+    lea r0, err_sequence
+    load r1, [err_sequence_len]
+    mov r2, r11
+    io.send r2, r2, r0, r1
+    b .command_loop
+
+; ============================================================================
+; Connection Close
+; ============================================================================
+.client_disconnect:
+    ; Close client socket
+    mov r0, r11
+    io.close r0, r0
+
+    ; Back to accept loop
+    b .accept_loop
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+{{UTILITY_SLOTS}}
+
+.exit:
+    ; Close server socket
+    mov r0, r10
+    io.close r0, r0
+    halt

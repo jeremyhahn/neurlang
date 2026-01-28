@@ -1,0 +1,180 @@
+{
+  "name": "smtp",
+  "description": "Simple Mail Transfer Protocol (RFC 5321)",
+  "version": "1.0",
+  "transport": "tcp",
+  "port": 25,
+  "line_ending": "\r\n",
+  "greeting": {
+    "format": "220 {hostname} SMTP Ready\r\n"
+  },
+  "states": [
+    {
+      "name": "INIT",
+      "initial": true,
+      "description": "Initial state, waiting for HELO/EHLO"
+    },
+    {
+      "name": "GREETED",
+      "description": "Client has identified itself"
+    },
+    {
+      "name": "MAIL_FROM",
+      "description": "Sender specified"
+    },
+    {
+      "name": "RCPT_TO",
+      "description": "At least one recipient specified"
+    },
+    {
+      "name": "DATA",
+      "description": "Reading message body"
+    },
+    {
+      "name": "QUIT",
+      "terminal": true,
+      "description": "Connection closing"
+    }
+  ],
+  "commands": [
+    {
+      "name": "HELO",
+      "pattern": "HELO {domain}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "simple_response",
+        "response": "250 Hello {domain}\r\n",
+        "next_state": "GREETED"
+      }
+    },
+    {
+      "name": "EHLO",
+      "pattern": "EHLO {domain}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "multi_line_response",
+        "lines": [
+          "250-{hostname}",
+          "250-SIZE 10240000",
+          "250-PIPELINING",
+          "250 OK"
+        ],
+        "next_state": "GREETED"
+      }
+    },
+    {
+      "name": "MAIL_FROM",
+      "pattern": "MAIL FROM:<{sender:until:>}>",
+      "valid_states": ["GREETED"],
+      "handler": {
+        "type": "simple_response",
+        "response": "250 OK\r\n",
+        "next_state": "MAIL_FROM"
+      }
+    },
+    {
+      "name": "RCPT_TO",
+      "pattern": "RCPT TO:<{recipient:until:>}>",
+      "valid_states": ["MAIL_FROM", "RCPT_TO"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "db_lookup",
+          "query": "SELECT 1 FROM users WHERE email = ?",
+          "param": "recipient"
+        },
+        "response_ok": "250 OK\r\n",
+        "response_err": "550 User not found\r\n",
+        "next_state": "RCPT_TO"
+      }
+    },
+    {
+      "name": "DATA",
+      "pattern": "DATA",
+      "valid_states": ["RCPT_TO"],
+      "handler": {
+        "type": "multiline_reader",
+        "response": "354 Start mail input\r\n",
+        "terminator": ".\r\n",
+        "max_size": 10485760,
+        "on_complete": {
+          "type": "simple_response",
+          "response": "250 OK: Message accepted\r\n",
+          "next_state": "GREETED"
+        }
+      }
+    },
+    {
+      "name": "RSET",
+      "pattern": "RSET",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "simple_response",
+        "response": "250 OK\r\n",
+        "next_state": "GREETED"
+      }
+    },
+    {
+      "name": "NOOP",
+      "pattern": "NOOP",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "simple_response",
+        "response": "250 OK\r\n"
+      }
+    },
+    {
+      "name": "QUIT",
+      "pattern": "QUIT",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "close_connection",
+        "response": "221 Bye\r\n"
+      }
+    }
+  ],
+  "errors": {
+    "syntax": "500 Syntax error\r\n",
+    "sequence": "503 Bad sequence of commands\r\n",
+    "not_found": "550 User not found\r\n",
+    "unknown": "502 Command not recognized\r\n"
+  },
+  "tests": [
+    {
+      "name": "basic_session",
+      "description": "Tests a basic SMTP session",
+      "steps": [
+        { "expect": "220" },
+        { "send": "HELO test.com\r\n", "expect": "250 Hello test.com\r\n" },
+        { "send": "MAIL FROM:<sender@test.com>\r\n", "expect": "250 OK\r\n" },
+        { "send": "RCPT TO:<user@example.com>\r\n", "expect": "250 OK\r\n" },
+        { "send": "QUIT\r\n", "expect": "221 Bye\r\n" }
+      ]
+    },
+    {
+      "name": "wrong_sequence",
+      "description": "Tests command sequence enforcement",
+      "steps": [
+        { "expect": "220" },
+        { "send": "MAIL FROM:<sender@test.com>\r\n", "expect": "503 Bad sequence of commands\r\n" }
+      ]
+    },
+    {
+      "name": "unknown_command",
+      "description": "Tests unknown command handling",
+      "steps": [
+        { "expect": "220" },
+        { "send": "INVALID\r\n", "expect": "502 Command not recognized\r\n" }
+      ]
+    },
+    {
+      "name": "ehlo_capabilities",
+      "description": "Tests EHLO with capability listing",
+      "steps": [
+        { "expect": "220" },
+        { "send": "EHLO client.test.com\r\n", "expect_contains": "250" },
+        { "send": "QUIT\r\n", "expect": "221 Bye\r\n" }
+      ]
+    }
+  ]
+}

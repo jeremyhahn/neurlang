@@ -1,0 +1,48 @@
+# Neurlang B300/Blackwell GPU Training Container
+# Uses PyTorch nightly with CUDA 12.8 for Blackwell architecture
+#
+# Usage:
+#   docker build -t neurlang-train-b300 -f docker/Dockerfile.b300 .
+#   docker run --rm --gpus all -v $(pwd)/data:/data -v $(pwd)/models:/models neurlang-train-b300 --data /data/training_data.jsonl
+
+# Blackwell needs CUDA 12.8+
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and dependencies
+RUN apt-get update -qq && \
+    apt-get install -y -qq python3 python3-pip python3-venv && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch nightly with CUDA 12.8 for Blackwell
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir --pre torch \
+        --index-url https://download.pytorch.org/whl/nightly/cu128 && \
+    pip3 install --no-cache-dir \
+        numpy \
+        tqdm
+
+# Create app directory
+WORKDIR /app
+
+# Copy training code (parallel model)
+COPY train/parallel /app/train/parallel
+
+# Create output directories
+RUN mkdir -p /data /models
+
+# Set Python path
+ENV PYTHONPATH=/app/train
+
+# Blackwell-specific environment variables
+ENV TORCH_CUDA_ARCH_LIST="sm_100"
+ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
+
+# Default entrypoint - run training script
+ENTRYPOINT ["python3", "/app/train/parallel/train.py"]
+
+# Default command - show help
+CMD ["--help"]

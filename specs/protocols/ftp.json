@@ -1,0 +1,287 @@
+{
+  "name": "ftp",
+  "description": "File Transfer Protocol (RFC 959)",
+  "version": "1.0",
+  "transport": "tcp",
+  "port": 21,
+  "line_ending": "\r\n",
+  "greeting": {
+    "format": "220 {hostname} FTP server ready\r\n"
+  },
+  "states": [
+    {
+      "name": "INIT",
+      "initial": true,
+      "description": "Waiting for USER"
+    },
+    {
+      "name": "USER_SENT",
+      "description": "Username received, waiting for PASS"
+    },
+    {
+      "name": "LOGGED_IN",
+      "description": "User authenticated"
+    },
+    {
+      "name": "TRANSFER",
+      "description": "Data transfer in progress"
+    },
+    {
+      "name": "QUIT",
+      "terminal": true,
+      "description": "Connection closing"
+    }
+  ],
+  "commands": [
+    {
+      "name": "USER",
+      "pattern": "USER {username}",
+      "valid_states": ["INIT"],
+      "handler": {
+        "type": "simple_response",
+        "response": "331 User name okay, need password\r\n",
+        "next_state": "USER_SENT"
+      }
+    },
+    {
+      "name": "PASS",
+      "pattern": "PASS {password}",
+      "valid_states": ["USER_SENT"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "extension",
+          "extension": "authenticate ftp user"
+        },
+        "response_ok": "230 User logged in, proceed\r\n",
+        "response_err": "530 Login incorrect\r\n",
+        "next_state": "LOGGED_IN"
+      }
+    },
+    {
+      "name": "PWD",
+      "pattern": "PWD",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "get current directory"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "257 \"{path}\" is current directory\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CWD",
+      "pattern": "CWD {path}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "extension",
+          "extension": "change directory"
+        },
+        "response_ok": "250 Directory changed\r\n",
+        "response_err": "550 Failed to change directory\r\n"
+      }
+    },
+    {
+      "name": "LIST",
+      "pattern": "LIST",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "next_state": "TRANSFER"
+      }
+    },
+    {
+      "name": "LIST_PATH",
+      "pattern": "LIST {path}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "next_state": "TRANSFER"
+      }
+    },
+    {
+      "name": "RETR",
+      "pattern": "RETR {filename}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "next_state": "TRANSFER"
+      }
+    },
+    {
+      "name": "STOR",
+      "pattern": "STOR {filename}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "next_state": "TRANSFER"
+      }
+    },
+    {
+      "name": "DELE",
+      "pattern": "DELE {filename}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "extension",
+          "extension": "delete file"
+        },
+        "response_ok": "250 File deleted\r\n",
+        "response_err": "550 Delete operation failed\r\n"
+      }
+    },
+    {
+      "name": "MKD",
+      "pattern": "MKD {dirname}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "extension",
+          "extension": "create directory"
+        },
+        "response_ok": "257 \"{dirname}\" created\r\n",
+        "response_err": "550 Create directory operation failed\r\n"
+      }
+    },
+    {
+      "name": "RMD",
+      "pattern": "RMD {dirname}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "validated_response",
+        "validation": {
+          "type": "extension",
+          "extension": "remove directory"
+        },
+        "response_ok": "250 Directory removed\r\n",
+        "response_err": "550 Remove directory operation failed\r\n"
+      }
+    },
+    {
+      "name": "TYPE",
+      "pattern": "TYPE {type}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "simple_response",
+        "response": "200 Type set to {type}\r\n"
+      }
+    },
+    {
+      "name": "PASV",
+      "pattern": "PASV",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "custom",
+        "slots": [
+          {
+            "type": "ExtensionCall",
+            "extension": "create passive connection"
+          },
+          {
+            "type": "ResponseBuilder",
+            "template": "227 Entering Passive Mode ({h1},{h2},{h3},{h4},{p1},{p2})\r\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PORT",
+      "pattern": "PORT {h1},{h2},{h3},{h4},{p1},{p2}",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "simple_response",
+        "response": "200 PORT command successful\r\n"
+      }
+    },
+    {
+      "name": "SYST",
+      "pattern": "SYST",
+      "valid_states": ["LOGGED_IN"],
+      "handler": {
+        "type": "simple_response",
+        "response": "215 UNIX Type: L8\r\n"
+      }
+    },
+    {
+      "name": "FEAT",
+      "pattern": "FEAT",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "multi_line_response",
+        "lines": [
+          "211-Features:",
+          " PASV",
+          " SIZE",
+          " UTF8",
+          "211 End"
+        ]
+      }
+    },
+    {
+      "name": "NOOP",
+      "pattern": "NOOP",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "simple_response",
+        "response": "200 NOOP ok\r\n"
+      }
+    },
+    {
+      "name": "QUIT",
+      "pattern": "QUIT",
+      "valid_states": ["ANY"],
+      "handler": {
+        "type": "close_connection",
+        "response": "221 Goodbye\r\n"
+      }
+    }
+  ],
+  "errors": {
+    "syntax": "500 Syntax error\r\n",
+    "not_logged_in": "530 Please login with USER and PASS\r\n",
+    "not_found": "550 File not found\r\n",
+    "permission": "550 Permission denied\r\n",
+    "unknown": "502 Command not implemented\r\n"
+  },
+  "tests": [
+    {
+      "name": "login_session",
+      "description": "Basic login flow",
+      "steps": [
+        { "expect": "220" },
+        { "send": "USER testuser\r\n", "expect": "331" },
+        { "send": "PASS testpass\r\n", "expect": "230" },
+        { "send": "PWD\r\n", "expect_contains": "257" },
+        { "send": "QUIT\r\n", "expect": "221" }
+      ]
+    },
+    {
+      "name": "login_failure",
+      "description": "Failed login",
+      "steps": [
+        { "expect": "220" },
+        { "send": "USER baduser\r\n", "expect": "331" },
+        { "send": "PASS wrongpass\r\n", "expect": "530" }
+      ]
+    },
+    {
+      "name": "not_logged_in",
+      "description": "Command without login",
+      "steps": [
+        { "expect": "220" },
+        { "send": "PWD\r\n", "expect": "530" }
+      ]
+    }
+  ]
+}

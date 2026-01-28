@@ -1,0 +1,63 @@
+# Neurlang Training Container
+# Parallel Instruction Model Training with GPU Support
+#
+# Usage (GPU):
+#   docker build -t neurlang-train -f docker/Dockerfile.train .
+#   docker run --rm --gpus all \
+#     -v $(pwd)/data:/data \
+#     -v $(pwd)/models:/models \
+#     neurlang-train \
+#       --data /data/training_data_500k.jsonl \
+#       --output /models/model.pt \
+#       --device cuda \
+#       --mixed-precision
+#
+# Usage (CPU):
+#   docker run --rm \
+#     -v $(pwd)/data:/data \
+#     -v $(pwd)/models:/models \
+#     neurlang-train \
+#       --data /data/training_data_500k.jsonl \
+#       --output /models/model.pt \
+#       --device cpu
+
+# Use CUDA base image for GPU support
+# For CPU-only, use Dockerfile.train-cpu instead
+ARG CUDA_VERSION=12.4.0
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and dependencies
+RUN apt-get update -qq && \
+    apt-get install -y -qq python3 python3-pip && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch with CUDA support
+ARG TORCH_CUDA=cu124
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir \
+        torch --index-url https://download.pytorch.org/whl/${TORCH_CUDA} && \
+    pip3 install --no-cache-dir \
+        numpy \
+        tqdm
+
+# Create app directory
+WORKDIR /app
+
+# Copy parallel model training code
+COPY train/parallel /app/train/parallel
+
+# Create output directories
+RUN mkdir -p /data /models
+
+# Set Python path for imports
+ENV PYTHONPATH=/app/train
+
+# Default entrypoint - run training script
+ENTRYPOINT ["python3", "/app/train/parallel/train.py"]
+
+# Default command - show help
+CMD ["--help"]

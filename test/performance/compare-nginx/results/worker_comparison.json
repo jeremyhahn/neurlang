@@ -1,0 +1,50 @@
+{
+    "benchmark": {
+        "date": "2026-01-23T04:11:17-05:00",
+        "requests": 10000,
+        "concurrency": 50,
+        "warmup": 1000,
+        "environment": "Docker bridge network"
+    },
+    "nginx": {
+        "workers": "auto (multi-worker)",
+        "requests_per_second": 61250.49,
+        "p99_ms": 1
+    },
+    "aibpl": {
+        "workers_0": {
+            "description": "Single-threaded",
+            "requests_per_second": 56035.91,
+            "vs_nginx_ratio": .91,
+            "vs_nginx_percent": 0,
+            "p99_ms": 2
+        },
+        "workers_1": {
+            "description": "1 worker (SO_REUSEPORT)",
+            "requests_per_second": 54241.11,
+            "vs_nginx_ratio": .88,
+            "vs_nginx_percent": -10.0,
+            "p99_ms": 4
+        },
+        "workers_2": {
+            "description": "2 workers (SO_REUSEPORT)",
+            "requests_per_second": 61224.61,
+            "vs_nginx_ratio": .99,
+            "vs_nginx_percent": 0,
+            "p99_ms": 2
+        },
+        "workers_4": {
+            "description": "4 workers (SO_REUSEPORT)",
+            "requests_per_second": 57132.74,
+            "vs_nginx_ratio": .93,
+            "vs_nginx_percent": 0,
+            "p99_ms": 3
+        }
+    },
+    "summary": {
+        "best_config": "workers=2",
+        "best_rps": 61224.61,
+        "best_vs_nginx_percent": 0,
+        "recommendation": "Use --workers 1 or --workers 4 for server workloads"
+    }
+}

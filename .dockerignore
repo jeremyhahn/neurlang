@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+.github
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Training data (large files)
+train/*.jsonl
+train/training_data.jsonl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Tests
+tests/
+*_test.rs
+
+# Benchmarks
+benches/
+
+# Scripts (not needed in container)
+scripts/
+
+# Misc
+*.log
+*.tmp

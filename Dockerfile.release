@@ -1,0 +1,48 @@
+# Neurlang Release Docker Image
+# Uses pre-built binary from GitHub Actions
+#
+# This Dockerfile is used by the release workflow.
+# For local builds, use the main Dockerfile instead.
+
+ARG VERSION=latest
+
+FROM debian:bookworm-slim
+
+ARG VERSION
+LABEL org.opencontainers.image.title="Neurlang"
+LABEL org.opencontainers.image.description="AI-Optimized Binary Programming Language"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/jeremyhahn/neurlang"
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash neurlang
+
+# Copy pre-built binary (from CI artifact)
+COPY nl /usr/local/bin/nl
+RUN chmod +x /usr/local/bin/nl
+
+# Create directories
+RUN mkdir -p /opt/neurlang/models
+
+# Set environment
+ENV NEURLANG_MODEL_PATH=/opt/neurlang/models/best_model.pt
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Set working directory
+WORKDIR /work
+
+# Switch to non-root user
+USER neurlang
+
+# Default command
+CMD ["nl", "--help"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
+    CMD nl --version || exit 1
